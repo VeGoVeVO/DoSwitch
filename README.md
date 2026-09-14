@@ -10,7 +10,7 @@
 [![Size](https://img.shields.io/badge/one%20exe-460%20KB-407010.svg)](#)
 [![Memory](https://img.shields.io/badge/idle%20RAM-~2%20MB-407010.svg)](#)
 
-**[English](#english) &nbsp;&middot;&nbsp; [Francais](#francais)**
+**[English](#english) &nbsp;&middot;&nbsp; [Francais](#francais) &nbsp;&middot;&nbsp; [Espanol](#espanol)**
 
 <img src="docs/panel-en.png" alt="The DoSwitch panel" width="620">
 
@@ -36,7 +36,7 @@ pressing anything.
   in your browser.
 - **Bound to the character, not the window.** Close the client, log back in
   tomorrow, the key still works.
-- **English and French**, switched with the toggle in the panel.
+- **English, French and Spanish**, switched with the toggle in the panel.
 
 ### Install
 
@@ -155,7 +155,7 @@ n'appuyez sur rien.
   dans votre navigateur.
 - **Liees au personnage, pas a la fenetre.** Fermez le client, reconnectez
   vous demain, la touche fonctionne toujours.
-- **Francais et anglais**, avec l'interrupteur dans le panneau.
+- **Francais, anglais et espagnol**, avec l'interrupteur dans le panneau.
 
 ### Installation
 
@@ -255,3 +255,41 @@ vous lancez le jeu, sans droits administrateur ni pour l'un ni pour l'autre.
 ### Licence
 
 MIT. Voir [LICENSE](LICENSE).
+
+---
+
+## Espanol
+
+DoSwitch da una tecla a cada ventana de Dofus abierta. La pulsas y esa
+ventana pasa al frente, al instante. O le das una sola tecla a todo el
+equipo y las recorre en el orden que tu elijas.
+
+Eso es todo el programa: un ejecutable de unos 460 KB en la bandeja del
+sistema, unos 2 MB de memoria y cero procesador mientras no pulses nada.
+
+- **Sin instalador, sin runtime, sin dependencias.** Descarga y ejecuta.
+- **Tus teclas siguen siendo tuyas.** Se capturan cuando Dofus esta en
+  primer plano y pasan de largo en cualquier otro sitio, asi que asignar
+  F1 no rompe F1 en tu navegador.
+- **Ligadas al personaje, no a la ventana.** Cierra el cliente, vuelve
+  manana, la tecla sigue funcionando.
+- **Espanol, frances e ingles**, con el interruptor del panel.
+
+### Uso
+
+| Accion | Como |
+| --- | --- |
+| Asignar una tecla | Clic en el boton de tecla, pulsa la tecla |
+| Quitar una tecla | Clic en el boton de tecla, pulsa Retroceso |
+| Definir el orden | Clic en el numero de orden, escribe 1 a 9 |
+| Cambiar ahora | Clic en la fila |
+| Una tecla para el equipo | Asigna una tecla a **Cuenta siguiente** |
+| Abrir el panel | Clic izquierdo en el icono de la bandeja |
+| Iniciar con Windows | Clic derecho en el icono |
+
+Los ajustes viven en `%APPDATA%\DoSwitch\settings.json`, en JSON legible,
+indexados por el nombre del personaje.
+
+### Licencia
+
+MIT. Ver [LICENSE](LICENSE).

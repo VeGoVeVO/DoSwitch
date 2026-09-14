@@ -39,7 +39,7 @@ const PILL_HEIGHT: i32 = 34;
 const KEY_WIDTH: i32 = 160;
 const ORDER_WIDTH: i32 = 90;
 const SUBTITLE_TOP: i32 = 48;
-const SUBTITLE_WIDTH: i32 = WIDTH - PAD * 2 - 66 - 86;
+const SUBTITLE_WIDTH: i32 = WIDTH - PAD * 2 - 66 - 114;
 
 #[derive(Clone, PartialEq)]
 pub enum Part {
@@ -115,7 +115,7 @@ fn layout(lang: Lang, rows: &[(String, String)], text: Text) -> (Vec<Item>, i32)
     let order_x = key_x - 20 - ORDER_WIDTH;
 
     items.push(Item {
-        area: R::new(WIDTH - PAD - 74, 24, 74, 28),
+        area: R::new(WIDTH - PAD - 102, 24, 102, 28),
         part: Part::Language,
         live: true,
     });
@@ -483,16 +483,21 @@ unsafe fn paint(hwnd: HWND) {
                 );
             }
             Part::Language => {
+                // Three segments, the live one in leaf. Clicking anywhere
+                // on it moves to the next language round the ring, which
+                // is one target instead of three and reads the same.
                 canvas.outline(area, at(8), at(1), BORDER, if hovered { RAISED } else { INK });
-                let half = area.width() / 2;
-                let english = R { r: area.l + half, ..area };
-                let french = R { l: area.l + half, ..area };
-                canvas.text("EN", english, fonts.column,
-                            if lang == Lang::En { LEAF } else { DIM },
-                            DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
-                canvas.text("FR", french, fonts.column,
-                            if lang == Lang::Fr { LEAF } else { DIM },
-                            DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+                let third = area.width() / 3;
+                for (index, one) in Lang::ALL.iter().enumerate() {
+                    let slot = R {
+                        l: area.l + third * index as i32,
+                        r: area.l + third * (index as i32 + 1),
+                        ..area
+                    };
+                    canvas.text(one.label(), slot, fonts.column,
+                                if lang == *one { LEAF } else { DIM },
+                                DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+                }
             }
             Part::Refresh | Part::Done => {
                 let done = item.part == Part::Done;
