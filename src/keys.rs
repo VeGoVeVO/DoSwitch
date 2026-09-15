@@ -76,6 +76,14 @@ fn key_name(code: u32) -> String {
         return ((code16 as u8) as char).to_string();
     }
     match code16 {
+        // The mouse, numbered the way players number it rather than the
+        // way Windows names it: left, right, middle, then the two thumb
+        // buttons. VK_XBUTTON1 is what everyone else calls Mouse 4.
+        VK_LBUTTON => "Mouse 1".into(),
+        VK_RBUTTON => "Mouse 2".into(),
+        VK_MBUTTON => "Mouse 3".into(),
+        VK_XBUTTON1 => "Mouse 4".into(),
+        VK_XBUTTON2 => "Mouse 5".into(),
         VK_SPACE => "Space".into(),
         VK_TAB => "Tab".into(),
         VK_INSERT => "Insert".into(),
@@ -99,6 +107,20 @@ fn key_name(code: u32) -> String {
 }
 
 fn key_code(name: &str) -> Option<u32> {
+    // Written back exactly as key_name writes it, so a settings file that
+    // says "Mouse 4" comes back as the button it was saved from. Both
+    // spellings are read because a person editing the file by hand will
+    // write one of them and should not have to guess which.
+    if let Some(number) = name.strip_prefix("mouse").map(|rest| rest.trim()) {
+        return match number {
+            "1" => Some(VK_LBUTTON as u32),
+            "2" => Some(VK_RBUTTON as u32),
+            "3" => Some(VK_MBUTTON as u32),
+            "4" => Some(VK_XBUTTON1 as u32),
+            "5" => Some(VK_XBUTTON2 as u32),
+            _ => None,
+        };
+    }
     if let Some(number) = name.strip_prefix('f') {
         if let Ok(index) = number.parse::<u16>() {
             if (1..=24).contains(&index) {

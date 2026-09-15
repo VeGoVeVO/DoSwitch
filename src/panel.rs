@@ -737,6 +737,29 @@ fn clicked(hwnd: HWND, part: Part) {
     repaint(hwnd);
 }
 
+/// Write a mouse button down as the bind being captured.
+///
+/// True when it was taken. A button is a virtual key code like any other -
+/// Windows gives the five it reports their own - so this is the same
+/// recording typed() does, without the modifier-only question that only a
+/// keyboard can ask.
+fn bind_pressed(hwnd: HWND, button: u32) -> bool {
+    let capture = app::with(|state| state.capture.clone());
+    let Capture::Key(owner) = capture else {
+        return false;
+    };
+    let bind = Bind {
+        code: button,
+        ctrl: (unsafe { GetKeyState(VK_CONTROL as i32) } as u16 & 0x8000) != 0,
+        alt: (unsafe { GetKeyState(VK_MENU as i32) } as u16 & 0x8000) != 0,
+        shift: (unsafe { GetKeyState(VK_SHIFT as i32) } as u16 & 0x8000) != 0,
+    };
+    app::set_key(&owner, bind);
+    app::with(|state| state.capture = Capture::Nothing);
+    repaint(hwnd);
+    true
+}
+
 fn typed(hwnd: HWND, code: u32) {
     let capture = app::with(|state| state.capture.clone());
     match capture {
@@ -838,9 +861,42 @@ unsafe extern "system" fn wndproc(
             repaint(hwnd);
             0
         }
+        // A mouse button IS a bind, so while the panel is waiting for one
+        // these press messages are the answer rather than a click on the
+        // window. Left is the exception: it is also how the cell being
+        // bound was opened in the first place, so it only counts when it
+        // lands back inside that same cell - anywhere else it stays an
+        // ordinary click, which is what cancels the capture.
+        WM_MBUTTONDOWN => {
+            bind_pressed(hwnd, VK_MBUTTON as u32);
+            0
+        }
+        WM_RBUTTONDOWN => {
+            bind_pressed(hwnd, VK_RBUTTON as u32);
+            0
+        }
+        WM_XBUTTONDOWN => {
+            let button = match ((wparam >> 16) & 0xFFFF) as u16 {
+                XBUTTON1 => VK_XBUTTON1,
+                XBUTTON2 => VK_XBUTTON2,
+                _ => return 0,
+            };
+            bind_pressed(hwnd, button as u32);
+            // TRUE, because a program that handles WM_XBUTTONDOWN says so.
+            1
+        }
+
         WM_LBUTTONDOWN => {
             let x = (lparam & 0xFFFF) as i16 as i32;
             let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
+            if let Capture::Key(owner) = app::with(|state| state.capture.clone()) {
+                let on_its_own_pill = hit(hwnd, x, y)
+                    .and_then(|index| part_at(hwnd, index))
+                    .is_some_and(|part| part == Part::KeyPill { owner: owner.clone() });
+                if on_its_own_pill && bind_pressed(hwnd, VK_LBUTTON as u32) {
+                    return 0;
+                }
+            }
             // The scrollbar first: a press on the thumb starts a drag, a
             // press on the track above or below it pages towards the click.
             if let Some(bar) = scrollbar_now(hwnd) {
