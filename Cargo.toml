@@ -6,6 +6,13 @@ description = "Switch between your open Dofus windows with one key each"
 license = "MIT"
 repository = "https://github.com/VeGoVeVO/DoSwitch"
 
+[[bin]]
+# Named for the product, not for the crate. Cargo would otherwise build
+# "doswitch.exe", and the file a buyer downloads and keeps on their desk
+# is the same file this builds.
+name = "DoSwitch"
+path = "src/main.rs"
+
 [dependencies]
 # The settings file, and nothing else. Everything the program draws and
 # every window it touches is Windows' own API, so there is no framework

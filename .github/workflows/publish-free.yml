@@ -1,0 +1,84 @@
+name: Publish DoSwitch
+
+# Builds the free app and publishes it to the licence server as
+# product=free, which the site's download button serves.
+#
+# The Pro app has had this since it existed; this one was still being
+# built by hand, which meant the version people downloaded was whichever
+# one happened to have been copied up last, and nothing tied it to a
+# commit. Now a push to main that touches the program publishes it, under
+# a version that reads as a version - the crate's plus the run number -
+# and the server names the file from that (DoSwitch-1.0.0.4.exe).
+#
+# NOTE ON CODE SIGNING: this uploads the exe as built. It is not
+# Authenticode-signed, so SmartScreen will warn on first run until a
+# certificate is wired in here. An unsigned, freshly built, zero
+# reputation Windows executable is also the exact profile Defender's
+# heuristics score badly, which is why the VERSIONINFO the build attaches
+# is filled in honestly rather than left empty.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "assets/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "build.rs"
+      - "tools/**"
+      - ".github/workflows/publish-free.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: publish-free
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The version the release is published under, and therefore the name
+      # the browser saves. Cargo.toml's version plus the run number reads
+      # as a version, sorts, and is still unique per build.
+      - name: Work out the version
+        id: version
+        shell: bash
+        run: |
+          crate=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          echo "version=${crate}.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "build=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "publishing ${crate}.${{ github.run_number }} from ${{ github.sha }}"
+
+      # Printed so a toolchain drift is visible in the log rather than in
+      # an argument about screenshots three releases later.
+      - name: Toolchain
+        run: rustc -V && cargo -V
+
+      - name: Build (release)
+        run: cargo build --release --locked
+        env:
+          # Reaches the exe's VERSIONINFO through build.rs, so the version
+          # Explorer shows is the one in the filename.
+          DOSWITCH_BUILD: ${{ steps.version.outputs.build }}
+
+      - name: Publish
+        run: |
+          npm init -y --silent
+          npm install --silent libsodium-wrappers@0.7.15
+          node tools/publish-release.mjs
+        env:
+          PRODUCT: free
+          MODULE_PATH: target/release/DoSwitch.exe
+          API_ORIGIN: ${{ secrets.API_ORIGIN || 'https://api.doswitchpro.com' }}
+          MODULE_SIGNING_KEY: ${{ secrets.MODULE_SIGNING_KEY }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          CHANNEL: stable

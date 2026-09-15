@@ -1,0 +1,17 @@
+# Pin the compiler, so a build here and a build in CI are the same build.
+#
+# They were not. The published loader and a local build of the same commit
+# rendered the subtitle at two different sizes - the CI one about a tenth
+# larger - while every other element matched to the pixel. Same source,
+# same env, same DPI, same locked dependencies; the binaries differed in a
+# third of their bytes, because the runner compiled with whatever rustc it
+# happened to ship that week and this machine had 1.98.1.
+#
+# A release you cannot reproduce locally is a release you cannot debug: it
+# turns "prod looks different" into an argument about screenshots instead
+# of a diff. Pinning costs a pinned-version bump now and then and buys back
+# the ability to say the two are the same build and mean it.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt"]
+targets = ["x86_64-pc-windows-msvc"]
