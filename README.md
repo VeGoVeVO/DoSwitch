@@ -47,6 +47,31 @@ pressing anything.
 Nothing is written outside `%APPDATA%\DoSwitch`, and nothing runs at startup
 unless you ask for it in the tray menu.
 
+#### If Windows warns you
+
+DoSwitch is not code signed yet, so Windows does not recognise the
+publisher. There are two different warnings:
+
+- **"Windows protected your PC" (SmartScreen).** The common one. Click
+  **More info**, then **Run anyway**. It appears because the file is new,
+  not because anything is wrong with it.
+- **"Smart App Control blocked an app" (Windows 11, clean installs only).**
+  This one cannot be clicked through. Smart App Control refuses anything
+  unsigned that Microsoft has not seen before. Until the app is signed,
+  the only way past it is to turn Smart App Control off in Windows
+  Security, which is a decision worth making on its own merits, not
+  because of this app.
+
+You can check you have the real file before running it. In PowerShell:
+
+```powershell
+Get-FileHash .\DoSwitch.exe -Algorithm SHA256
+```
+
+The result should match the SHA-256 published on the
+[release](../../releases/latest). The whole program is in this repository
+if you would rather read it or build it yourself.
+
 ### Use
 
 | Action | How |
@@ -165,6 +190,34 @@ n'appuyez sur rien.
 
 Rien n'est ecrit en dehors de `%APPDATA%\DoSwitch`, et rien ne demarre avec
 Windows tant que vous ne le demandez pas dans le menu.
+
+#### Si Windows vous avertit
+
+DoSwitch n'est pas encore signe, donc Windows ne reconnait pas l'editeur.
+Il y a deux avertissements differents:
+
+- **"Windows a protege votre ordinateur" (SmartScreen).** Le plus courant.
+  Cliquez sur **Informations complementaires**, puis **Executer quand
+  meme**. Il apparait parce que le fichier est recent, pas parce qu'il a
+  quoi que ce soit d'anormal.
+- **"Le Controle intelligent des applications a bloque une application"**
+  (Windows 11, installations neuves uniquement). Celui-la ne se contourne
+  pas d'un clic: le Controle intelligent refuse tout binaire non signe
+  que Microsoft ne connait pas deja. Tant que l'application n'est pas
+  signee, le seul moyen est de desactiver cette fonction dans la Securite
+  Windows, ce qui se decide pour de bonnes raisons et pas a cause d'une
+  seule application.
+
+Vous pouvez verifier que le fichier est bien le bon avant de l'executer,
+dans PowerShell:
+
+```powershell
+Get-FileHash .\DoSwitch.exe -Algorithm SHA256
+```
+
+Le resultat doit correspondre au SHA-256 publie sur la
+[release](../../releases/latest). Tout le programme est dans ce depot si
+vous preferez le lire ou le compiler vous meme.
 
 ### Utilisation
 
@@ -289,6 +342,32 @@ sistema, unos 2 MB de memoria y cero procesador mientras no pulses nada.
 
 Los ajustes viven en `%APPDATA%\DoSwitch\settings.json`, en JSON legible,
 indexados por el nombre del personaje.
+
+### Si Windows te avisa
+
+DoSwitch todavia no esta firmado, asi que Windows no reconoce al editor.
+Hay dos avisos distintos:
+
+- **"Windows protegio tu PC" (SmartScreen).** El habitual. Pulsa **Mas
+  informacion** y luego **Ejecutar de todas formas**. Aparece porque el
+  archivo es nuevo, no porque tenga nada raro.
+- **"Control inteligente de aplicaciones bloqueo una aplicacion"**
+  (Windows 11, solo instalaciones limpias). Este no se puede saltar con
+  un clic: rechaza cualquier binario sin firmar que Microsoft no conozca.
+  Hasta que la aplicacion este firmada, la unica salida es desactivar esa
+  funcion en Seguridad de Windows, algo que conviene decidir por si mismo
+  y no por una sola aplicacion.
+
+Puedes comprobar que el archivo es el autentico antes de ejecutarlo, en
+PowerShell:
+
+```powershell
+Get-FileHash .\DoSwitch.exe -Algorithm SHA256
+```
+
+El resultado debe coincidir con el SHA-256 publicado en la
+[release](../../releases/latest). Todo el programa esta en este
+repositorio si prefieres leerlo o compilarlo tu mismo.
 
 ### Licencia
 
