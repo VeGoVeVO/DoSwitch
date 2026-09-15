@@ -14,11 +14,13 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM}
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TRACKMOUSEEVENT};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SetCapture, ReleaseCapture};
 
 // Not in the crate's tables, and a missing constant in a match arm binds
 // a name instead of failing, which silently swallows every later arm.
 const TME_LEAVE: u32 = 0x0000_0002;
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const WM_MOUSEWHEEL: u32 = 0x020A;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -38,6 +40,14 @@ const ROW_GAP: i32 = 8;
 const PILL_HEIGHT: i32 = 34;
 const KEY_WIDTH: i32 = 160;
 const ORDER_WIDTH: i32 = 90;
+// The list shows at most this many accounts and scrolls the rest, so
+// the window is a fixed, sensible size whether a player runs two
+// clients or twenty. Six is what fits without the panel feeling tall.
+const MAX_VISIBLE_ROWS: usize = 6;
+// The scrollbar's gutter on the right of the list, present only when
+// there is something to scroll.
+const SCROLLBAR_GUTTER: i32 = 16;
+const SCROLLBAR_WIDTH: i32 = 6;
 const SUBTITLE_TOP: i32 = 48;
 const SUBTITLE_WIDTH: i32 = WIDTH - PAD * 2 - 66 - 114;
 
@@ -107,11 +117,31 @@ pub struct Text {
     pub note: i32,
 }
 
-/// Where everything is, in logical pixels, plus the height it all needs.
-fn layout(lang: Lang, rows: &[(String, String)], text: Text) -> (Vec<Item>, i32) {
+/// Where the scrollbar is and how far it can go, when the account
+/// list is longer than MAX_VISIBLE_ROWS. None when everything fits.
+#[derive(Clone, Copy)]
+pub struct Scroll {
+    pub track: R,
+    pub thumb: R,
+    pub max: usize,
+}
+
+/// Where everything is, in logical pixels, plus the height it all needs
+/// and the scrollbar when the list is longer than the panel shows.
+///
+/// The account rows live in a fixed viewport of at most MAX_VISIBLE_ROWS;
+/// `scroll` (a whole-row offset) chooses which slice is drawn. Everything
+/// below the viewport - the Next account row, the note, the footer - is
+/// pinned, so the window is one fixed size no matter how many accounts
+/// are open. This is also why toggling to a wordier language cannot push
+/// the footer off the bottom the way it once did.
+fn layout(lang: Lang, rows: &[(String, String)], text: Text, scroll: usize)
+          -> (Vec<Item>, i32, Option<Scroll>) {
     let mut items = Vec::new();
-    let inner = WIDTH - PAD * 2;
-    let key_x = WIDTH - PAD - 14 - KEY_WIDTH;
+    let overflowing = rows.len() > MAX_VISIBLE_ROWS;
+    let gutter = if overflowing { SCROLLBAR_GUTTER } else { 0 };
+    let inner = WIDTH - PAD * 2 - gutter;
+    let key_x = WIDTH - PAD - 14 - gutter - KEY_WIDTH;
     let order_x = key_x - 20 - ORDER_WIDTH;
 
     items.push(Item {
@@ -120,11 +150,15 @@ fn layout(lang: Lang, rows: &[(String, String)], text: Text) -> (Vec<Item>, i32)
         live: true,
     });
 
-    let mut y = text.header + 36;
+    let list_top = text.header + 36;
+    let visible = rows.len().min(MAX_VISIBLE_ROWS);
+    let scroll = scroll.min(max_scroll(rows.len()));
+    let mut y = list_top;
     if rows.is_empty() {
         y += 54; // the "nothing open" line sits where the first row would
     }
-    for (character, breed) in rows {
+    for slot in 0..visible {
+        let (character, breed) = &rows[scroll + slot];
         let area = R::new(PAD, y, inner, ROW_HEIGHT);
         items.push(Item {
             area,
@@ -147,7 +181,21 @@ fn layout(lang: Lang, rows: &[(String, String)], text: Text) -> (Vec<Item>, i32)
         y += ROW_HEIGHT + ROW_GAP;
     }
 
-    let next_area = R::new(PAD, y, inner, ROW_HEIGHT);
+    // The scrollbar spans exactly the rows on screen, so its length reads
+    // as "this much of the list is showing" at a glance.
+    let scrollbar = if overflowing {
+        let span = visible as i32 * (ROW_HEIGHT + ROW_GAP) - ROW_GAP;
+        let track = R::new(WIDTH - PAD - SCROLLBAR_WIDTH, list_top, SCROLLBAR_WIDTH, span);
+        let thumb_h = (span * visible as i32 / rows.len() as i32).max(28);
+        let steps = max_scroll(rows.len()).max(1) as i32;
+        let thumb_y = track.t + (span - thumb_h) * scroll as i32 / steps;
+        let thumb = R::new(track.l, thumb_y, SCROLLBAR_WIDTH, thumb_h);
+        Some(Scroll { track, thumb, max: max_scroll(rows.len()) })
+    } else {
+        None
+    };
+
+    let next_area = R::new(PAD, y, WIDTH - PAD * 2 - gutter, ROW_HEIGHT);
     items.push(Item { area: next_area, part: Part::NextRow, live: true });
     items.push(Item {
         area: R::new(key_x, y + (ROW_HEIGHT - PILL_HEIGHT) / 2, KEY_WIDTH, PILL_HEIGHT),
@@ -169,7 +217,12 @@ fn layout(lang: Lang, rows: &[(String, String)], text: Text) -> (Vec<Item>, i32)
         live: true,
     });
     let _ = lang;
-    (items, y + 12 + 36 + 18)
+    (items, y + 12 + 36 + 18, scrollbar)
+}
+
+/// The furthest the list can be scrolled, in whole rows.
+fn max_scroll(row_count: usize) -> usize {
+    row_count.saturating_sub(MAX_VISIBLE_ROWS)
 }
 
 fn scale_of(hwnd: HWND) -> f32 {
@@ -266,15 +319,40 @@ pub fn create() -> HWND {
     }
 }
 
+/// The window's pixel size for the current language and account count.
+/// Deterministic, so show and resize always agree.
+unsafe fn window_size(hwnd: HWND) -> (i32, i32) {
+    let scale = scale_of(hwnd);
+    let lang = app::language();
+    let scroll = app::with(|state| state.scroll);
+    let (_, height, _) = layout(lang, &rows_now(), measure_text(scale, lang), scroll);
+    (
+        (WIDTH as f32 * scale).round() as i32,
+        (height as f32 * scale).round() as i32,
+    )
+}
+
+/// Resize the window to fit its current contents WITHOUT moving it, then
+/// repaint. Called whenever the contents change height under the panel -
+/// a language toggle, a refresh - so the footer can never be pushed off
+/// the bottom the way a wordier language once did.
+pub fn resize(hwnd: HWND) {
+    unsafe {
+        let (width, height) = window_size(hwnd);
+        SetWindowPos(
+            hwnd, std::ptr::null_mut(), 0, 0, width, height,
+            SWP_NOMOVE | SWP_NOZORDER,
+        );
+        InvalidateRect(hwnd, std::ptr::null(), 0);
+    }
+}
+
 /// Size the window to its contents, centre it, and show it.
 pub fn show(hwnd: HWND) {
     unsafe {
         app::refresh();
-        let scale = scale_of(hwnd);
-        let lang = app::language();
-        let (_, height) = layout(lang, &rows_now(), measure_text(scale, lang));
-        let width = (WIDTH as f32 * scale).round() as i32;
-        let height = (height as f32 * scale).round() as i32;
+        app::with(|state| state.scroll = state.scroll.min(max_scroll(state.clients.len())));
+        let (width, height) = window_size(hwnd);
 
         let mut work: RECT = std::mem::zeroed();
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut work as *mut RECT as *mut _, 0);
@@ -321,7 +399,8 @@ unsafe fn paint(hwnd: HWND) {
     let lang = app::language();
     let rows = rows_now();
     let text = measure_text(scale, lang);
-    let (items, logical_height) = layout(lang, &rows, text);
+    let scroll = app::with(|state| state.scroll);
+    let (items, logical_height, scrollbar) = layout(lang, &rows, text, scroll);
     let width = (WIDTH as f32 * scale).round() as i32;
     let height = (logical_height as f32 * scale).round() as i32;
 
@@ -546,14 +625,57 @@ unsafe fn paint(hwnd: HWND) {
         DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
     );
 
+    // The scrollbar, drawn by hand in the palette so it belongs to the
+    // panel rather than to Windows: a faint track, a leaf thumb that is
+    // brighter while the pointer is over it.
+    if let Some(bar) = scrollbar {
+        let track = scaled(bar.track, scale);
+        canvas.round(track, track.width() / 2, mix(INK, BORDER, 0.8));
+        let thumb = scaled(bar.thumb, scale);
+        let over = hover == Some(usize::MAX);
+        canvas.round(thumb, thumb.width() / 2, if over { LEAF } else { mix(MOSS, LEAF, 0.5) });
+    }
+
     canvas.blit_to(dc, 0, 0);
     EndPaint(hwnd, &paint_struct);
+}
+
+/// The scrollbar for the panel as it is right now, or None when the list
+/// fits. Recomputed rather than cached so it always matches what is drawn.
+fn scrollbar_now(hwnd: HWND) -> Option<Scroll> {
+    let scale = scale_of(hwnd);
+    let lang = app::language();
+    let scroll = app::with(|state| state.scroll);
+    let (_, _, bar) = layout(lang, &rows_now(), measure_text(scale, lang), scroll);
+    let _ = scale;
+    bar
+}
+
+/// Turn a pointer y (device pixels) into a scroll offset while dragging.
+fn drag_scroll_to(hwnd: HWND, y: i32) {
+    let scale = scale_of(hwnd);
+    let Some(bar) = scrollbar_now(hwnd) else { return };
+    let track = scaled(bar.track, scale);
+    let thumb_h = scaled(bar.thumb, scale).height();
+    let grab = app::with(|state| state.drag_grab);
+    let span = (track.height() - thumb_h).max(1);
+    let offset = (y - track.t - grab).clamp(0, span);
+    let target = (offset as i64 * bar.max as i64 / span as i64) as usize;
+    let changed = app::with(|state| {
+        let was = state.scroll;
+        state.scroll = target.min(bar.max);
+        was != state.scroll
+    });
+    if changed {
+        repaint(hwnd);
+    }
 }
 
 fn hit(hwnd: HWND, x: i32, y: i32) -> Option<usize> {
     let scale = scale_of(hwnd);
     let lang = app::language();
-    let (items, _) = layout(lang, &rows_now(), measure_text(scale, lang));
+    let scroll = app::with(|state| state.scroll);
+    let (items, _, _) = layout(lang, &rows_now(), measure_text(scale, lang), scroll);
     // BACKWARDS, because that is the order they were drawn in. A row's
     // rectangle runs the full width and the pills sit ON it, so a search
     // from the front answers "the row" for every click on a pill - which
@@ -566,7 +688,8 @@ fn hit(hwnd: HWND, x: i32, y: i32) -> Option<usize> {
 fn part_at(hwnd: HWND, index: usize) -> Option<Part> {
     let scale = scale_of(hwnd);
     let lang = app::language();
-    let (items, _) = layout(lang, &rows_now(), measure_text(scale, lang));
+    let scroll = app::with(|state| state.scroll);
+    let (items, _, _) = layout(lang, &rows_now(), measure_text(scale, lang), scroll);
     items.get(index).map(|item| item.part.clone())
 }
 
@@ -584,13 +707,22 @@ fn clicked(hwnd: HWND, part: Part) {
         Part::NextRow => {
             app::switch_next();
         }
-        Part::Refresh => app::refresh(),
+        Part::Refresh => {
+            app::refresh();
+            app::with(|state| state.scroll = state.scroll.min(max_scroll(state.clients.len())));
+            resize(hwnd);
+            return;
+        }
         Part::Done => hide(hwnd),
         Part::Language => {
             app::with(|state| {
                 state.settings.lang = state.settings.lang.other();
             });
             app::save();
+            // The subtitle and note are longer in some languages, so the
+            // window's height changes with the language.
+            resize(hwnd);
+            return;
         }
     }
     repaint(hwnd);
@@ -651,9 +783,31 @@ unsafe extern "system" fn wndproc(
             0
         }
         WM_ERASEBKGND => 1, // the whole surface is painted every time
+        WM_MOUSEWHEEL => {
+            // One notch, one row. The list is the only thing that scrolls,
+            // and it scrolls in whole rows so nothing is ever half shown.
+            let delta = ((wparam >> 16) & 0xFFFF) as i16;
+            let rows = rows_now().len();
+            app::with(|state| {
+                let ceiling = max_scroll(rows);
+                if delta > 0 {
+                    state.scroll = state.scroll.saturating_sub(1);
+                } else if delta < 0 {
+                    state.scroll = (state.scroll + 1).min(ceiling);
+                }
+            });
+            repaint(hwnd);
+            0
+        }
         WM_MOUSEMOVE => {
             let x = (lparam & 0xFFFF) as i16 as i32;
             let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
+            // Dragging the thumb: the pointer's position in the track maps
+            // straight to a row offset.
+            if app::with(|state| state.dragging) {
+                drag_scroll_to(hwnd, y);
+                return 0;
+            }
             let found = hit(hwnd, x, y);
             let changed = app::with(|state| {
                 let changed = state.hover != found;
@@ -678,6 +832,32 @@ unsafe extern "system" fn wndproc(
         WM_LBUTTONDOWN => {
             let x = (lparam & 0xFFFF) as i16 as i32;
             let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
+            // The scrollbar first: a press on the thumb starts a drag, a
+            // press on the track above or below it pages towards the click.
+            if let Some(bar) = scrollbar_now(hwnd) {
+                let scale = scale_of(hwnd);
+                let thumb = scaled(bar.thumb, scale);
+                let track = scaled(bar.track, scale);
+                if thumb.holds(x, y) {
+                    let grab = y - thumb.t;
+                    app::with(|state| { state.dragging = true; state.drag_grab = grab; });
+                    SetCapture(hwnd);
+                    return 0;
+                }
+                if track.holds(x, y) {
+                    let rows = rows_now().len();
+                    app::with(|state| {
+                        let ceiling = max_scroll(rows);
+                        if y < thumb.t {
+                            state.scroll = state.scroll.saturating_sub(MAX_VISIBLE_ROWS);
+                        } else {
+                            state.scroll = (state.scroll + MAX_VISIBLE_ROWS).min(ceiling);
+                        }
+                    });
+                    repaint(hwnd);
+                    return 0;
+                }
+            }
             if let Some(index) = hit(hwnd, x, y) {
                 if let Some(part) = part_at(hwnd, index) {
                     clicked(hwnd, part);
@@ -685,6 +865,13 @@ unsafe extern "system" fn wndproc(
             } else {
                 app::with(|state| state.capture = Capture::Nothing);
                 repaint(hwnd);
+            }
+            0
+        }
+        WM_LBUTTONUP => {
+            if app::with(|state| state.dragging) {
+                app::with(|state| state.dragging = false);
+                ReleaseCapture();
             }
             0
         }

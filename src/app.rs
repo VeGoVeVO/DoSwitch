@@ -31,6 +31,15 @@ pub struct App {
     pub panel: HWND,
     pub capture: Capture,
     pub hover: Option<usize>,
+    /// Index of the first account row shown when the list is longer than
+    /// the panel cares to grow. Scrolling is by whole rows, so there is
+    /// never a half row at the top or bottom to misjudge.
+    pub scroll: usize,
+    /// True while the scrollbar thumb is being dragged, with the grab
+    /// offset from the top of the thumb so it does not jump on the first
+    /// move.
+    pub dragging: bool,
+    pub drag_grab: i32,
 }
 
 thread_local! {
@@ -45,6 +54,9 @@ pub fn start(settings: Settings) {
             panel: std::ptr::null_mut(),
             capture: Capture::Nothing,
             hover: None,
+            scroll: 0,
+            dragging: false,
+            drag_grab: 0,
         });
     });
 }

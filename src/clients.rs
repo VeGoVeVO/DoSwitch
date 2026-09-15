@@ -45,6 +45,26 @@ thread_local! {
 
 /// Every logged in Dofus window, in the order Windows lists them.
 pub fn list() -> Vec<Client> {
+    // A test hatch, never reached in a normal run: set DOSWITCH_FAKE to a
+    // count and the list is that many invented accounts, so the panel can
+    // be seen under twenty windows without opening twenty clients. It is
+    // read fresh each call, costs nothing when unset, and cannot fire by
+    // accident because the variable does not exist on a player's machine.
+    if let Ok(raw) = std::env::var("DOSWITCH_FAKE") {
+        if let Ok(count) = raw.trim().parse::<usize>() {
+            let breeds = [
+                "Iop", "Cra", "Eniripsa", "Sacrieur", "Pandawa", "Feca",
+                "Sram", "Xelor", "Ecaflip", "Enutrof", "Osamodas", "Sadida",
+            ];
+            return (0..count)
+                .map(|i| Client {
+                    hwnd: std::ptr::null_mut(),
+                    character: format!("Account-{:02}", i + 1),
+                    breed: breeds[i % breeds.len()].to_string(),
+                })
+                .collect();
+        }
+    }
     FOUND.with(|found| found.borrow_mut().clear());
     unsafe {
         EnumWindows(Some(each), 0);
