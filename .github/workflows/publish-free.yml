@@ -82,3 +82,18 @@ jobs:
           RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
           CHANNEL: stable
+
+      # What a buyer downloads must be the file this run built, byte for
+      # byte. The Pro app shipped for weeks with a publish step quietly
+      # changing the binary after it had been checked; this is the line
+      # that would have caught it on day one.
+      - name: The served download is the file that was built
+        shell: bash
+        run: |
+          built=$(sha256sum target/release/DoSwitch.exe | cut -d' ' -f1)
+          curl -sSL --retry 5 --retry-delay 3 "$API_ORIGIN/api/v1/download/free" -o served.exe
+          served=$(sha256sum served.exe | cut -d' ' -f1)
+          echo "built  $built"; echo "served $served"
+          test "$built" = "$served" || { echo "the server is serving different bytes than this run built"; exit 1; }
+        env:
+          API_ORIGIN: ${{ secrets.API_ORIGIN || 'https://api.doswitchpro.com' }}
