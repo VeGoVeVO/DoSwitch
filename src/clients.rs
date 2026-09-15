@@ -56,10 +56,21 @@ pub fn list() -> Vec<Client> {
                 "Iop", "Cra", "Eniripsa", "Sacrieur", "Pandawa", "Feca",
                 "Sram", "Xelor", "Ecaflip", "Enutrof", "Osamodas", "Sadida",
             ];
+            // Invented names, so a screenshot taken from this never
+            // carries somebody's real characters into a public README.
+            let names = [
+                "Aurelia", "Kaelin-Vex", "Morwen", "Tovak", "Elandre",
+                "Sylnae", "Brannoc", "Ysolde", "Faelan", "Ombrelle",
+                "Cendrik", "Nivelle",
+            ];
             return (0..count)
                 .map(|i| Client {
                     hwnd: std::ptr::null_mut(),
-                    character: format!("Account-{:02}", i + 1),
+                    character: if i < names.len() {
+                        names[i].to_string()
+                    } else {
+                        format!("{}-{}", names[i % names.len()], i / names.len() + 1)
+                    },
                     breed: breeds[i % breeds.len()].to_string(),
                 })
                 .collect();
@@ -102,7 +113,7 @@ fn window_title(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buffer[..taken.max(0) as usize])
 }
 
-/// ("Back-Bonned", "Pandawa") out of "Back-Bonned - Pandawa - 3.6 - Release".
+/// ("Morwen", "Pandawa") out of "Morwen - Pandawa - 3.6 - Release".
 ///
 /// Split on the separator WITH its spaces. A character name may contain a
 /// hyphen, and one that does was read as half a name for as long as the

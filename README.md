@@ -101,9 +101,9 @@ name:
   "language": "en",
   "next": "F4",
   "accounts": {
-    "Tuffmommy":   { "key": "F2", "order": 1 },
-    "Vego-Sacri":  { "key": "F3", "order": 2 },
-    "Back-Bonned": { "key": "F1", "order": 3 }
+    "Aurelia":   { "key": "F2", "order": 1 },
+    "Kaelin-Vex":  { "key": "F3", "order": 2 },
+    "Morwen": { "key": "F1", "order": 3 }
   }
 }
 ```
@@ -248,9 +248,9 @@ personnage:
   "language": "fr",
   "next": "F4",
   "accounts": {
-    "Tuffmommy":   { "key": "F2", "order": 1 },
-    "Vego-Sacri":  { "key": "F3", "order": 2 },
-    "Back-Bonned": { "key": "F1", "order": 3 }
+    "Aurelia":   { "key": "F2", "order": 1 },
+    "Kaelin-Vex":  { "key": "F3", "order": 2 },
+    "Morwen": { "key": "F1", "order": 3 }
   }
 }
 ```
