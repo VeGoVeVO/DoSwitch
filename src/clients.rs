@@ -27,7 +27,7 @@
 
 use std::cell::RefCell;
 
-use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, MAX_PATH};
+use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, MAX_PATH, WPARAM};
 use windows_sys::Win32::System::Threading::*;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -87,30 +87,71 @@ unsafe extern "system" fn each(hwnd: HWND, _param: LPARAM) -> BOOL {
     if IsWindowVisible(hwnd) == 0 {
         return 1;
     }
-    let title = window_title(hwnd);
+    // The verdict is recorded on the way past, either way. This walk is
+    // already paying for the title and the process image, so the cache the
+    // keyboard hook reads is filled by the refresh that was happening
+    // anyway rather than by a second pass of its own.
+    let Some(title) = window_title(hwnd) else {
+        // Could not read it. Leave whatever verdict it already has alone.
+        return 1;
+    };
     let Some((character, breed)) = split_title(&title) else {
+        remember(hwnd, false);
         return 1;
     };
     let mut pid = 0u32;
     GetWindowThreadProcessId(hwnd, &mut pid);
     if pid == 0 || !is_game_process(pid) {
+        remember(hwnd, false);
         return 1;
     }
+    remember(hwnd, true);
     FOUND.with(|found| {
         found.borrow_mut().push(Client { hwnd, character, breed })
     });
     1
 }
 
-fn window_title(hwnd: HWND) -> String {
-    let length = unsafe { GetWindowTextLengthW(hwnd) };
-    if length <= 0 {
-        return String::new();
+/// A window's title, with a deadline.
+///
+/// GetWindowTextW against a window owned by ANOTHER process is not a read
+/// of anything: it is SendMessage(WM_GETTEXT), and it blocks until that
+/// process pumps its message queue. A Dofus client loading a map, taking
+/// a garbage collection pause, or waiting on the disk does not pump, and
+/// the call sits there. This used to be called from inside the low level
+/// keyboard hook, where Windows gives the whole callback 300ms before it
+/// gives up on it and lets the key through unhandled - which is exactly
+/// what "sometimes I press F2 and nothing happens" was.
+///
+/// It is off the hook path now, but a title read that can hang the UI
+/// thread for seconds is not something to leave lying around either, so
+/// the send carries a deadline and ABORTIFHUNG. A title we could not get
+/// comes back empty, which every caller already treats as "not a client".
+fn window_title(hwnd: HWND) -> Option<String> {
+    const TITLE_TIMEOUT_MS: u32 = 120;
+    let mut buffer = [0u16; 256];
+    let mut taken: usize = 0;
+    let ok = unsafe {
+        SendMessageTimeoutW(
+            hwnd,
+            WM_GETTEXT,
+            buffer.len() as WPARAM,
+            buffer.as_mut_ptr() as LPARAM,
+            SMTO_ABORTIFHUNG | SMTO_BLOCK,
+            TITLE_TIMEOUT_MS,
+            &mut taken as *mut usize as *mut usize,
+        )
+    };
+    // None is "we could not read it", which is NOT the same as "it has no
+    // title" and must not be cached as a decision. A client that was busy
+    // when we happened to ask is exactly the one whose key has to keep
+    // working; recording a no for it would switch that key off until
+    // something else happened to refresh the list.
+    if ok == 0 {
+        return None;
     }
-    let mut buffer = vec![0u16; length as usize + 1];
-    let taken =
-        unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
-    String::from_utf16_lossy(&buffer[..taken.max(0) as usize])
+    let taken = taken.min(buffer.len() - 1);
+    Some(String::from_utf16_lossy(&buffer[..taken]))
 }
 
 /// ("Morwen", "Pandawa") out of "Morwen - Pandawa - 3.6 - Release".
@@ -155,15 +196,115 @@ fn is_game_process(pid: u32) -> bool {
     }
 }
 
-/// True when the window in front right now is one of the game's.
-pub fn game_has_focus() -> bool {
-    let front = unsafe { GetForegroundWindow() };
-    if front.is_null() {
+thread_local! {
+    /// Windows we have already decided about: true for a logged in game
+    /// client, false for everything else. The keyboard hook reads this and
+    /// NOTHING else, because every way of asking Windows the question -
+    /// the title, the process image - is a call that can block, and a low
+    /// level hook callback that blocks for 300ms has its key taken away
+    /// from it and passed through unhandled.
+    static VERDICTS: RefCell<std::collections::HashMap<isize, (bool, std::time::Instant)>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+/// How long a decision about a window is used before it is looked at
+/// again. The old answer keeps being used while the new one is worked out
+/// off the hook path, so going stale costs no keystroke - it just means
+/// the answer is at most this old.
+const VERDICT_TTL: std::time::Duration = std::time::Duration::from_secs(3);
+
+thread_local! {
+    /// The window one of OUR switches is currently heading for, and when
+    /// it set off. Nothing else sets this.
+    static SWITCHING: RefCell<(isize, Option<std::time::Instant>)> =
+        const { RefCell::new((0, None)) };
+}
+
+/// How long after a switch sets off the foreground still counts as the
+/// game's. A switch is not instant: between asking for a window and that
+/// window being in front there is a gap in which GetForegroundWindow
+/// answers with the old window, with the shell, or with nothing at all.
+const IN_FLIGHT: std::time::Duration = std::time::Duration::from_millis(450);
+
+/// Remember that a switch to this window has set off.
+pub fn note_switch(hwnd: HWND) {
+    SWITCHING.with(|s| *s.borrow_mut() = (hwnd as isize, Some(std::time::Instant::now())));
+}
+
+/// True while one of our own switches is still in flight.
+///
+/// This exists because of a hole the counters found: spam the binds and
+/// one press in three was being read as "the game is not in front" and
+/// handed to whatever was. It was not - the switch it had just asked for
+/// had not landed yet, and the foreground was mid-change. Without this a
+/// player pressing faster than Windows can raise a window loses the press
+/// AND sends the key into the game, which is the worse half.
+pub fn switch_in_flight() -> bool {
+    SWITCHING.with(|s| {
+        let (_, at) = *s.borrow();
+        at.is_some_and(|at| at.elapsed() < IN_FLIGHT)
+    })
+}
+
+/// What we already know about this window, without asking Windows.
+///
+/// `None` means we have never looked at it. The hook treats that as "not
+/// mine" for this one keystroke and asks for it to be looked at off the
+/// hook path, so the answer is there by the next one. A key going to the
+/// game once, the first time a brand new client is focused, is a far
+/// smaller thing than a key being dropped because the callback was busy.
+/// What we know, and whether it wants looking at again.
+///
+/// The verdict is ALWAYS the one to act on, even when stale. The first
+/// version of this returned None for a stale entry, which meant one key in
+/// every few seconds was passed through while the answer was recomputed -
+/// trading a rare failure for a regular one.
+pub fn cached_verdict(hwnd: HWND) -> (Option<bool>, bool) {
+    if hwnd.is_null() {
+        return (Some(false), false);
+    }
+    VERDICTS.with(|v| match v.borrow().get(&(hwnd as isize)) {
+        Some((verdict, at)) => (Some(*verdict), at.elapsed() > VERDICT_TTL),
+        None => (None, true),
+    })
+}
+
+/// Decide about one window and remember it. Safe to call from anywhere
+/// that is not the keyboard hook: it reads the process image and the
+/// title, both of which can block, the title now with a deadline.
+pub fn judge(hwnd: HWND) -> bool {
+    if hwnd.is_null() {
         return false;
     }
+    let Some(title) = window_title(hwnd) else {
+        // Busy, or gone. Whatever is already recorded stands; we do not
+        // turn "could not ask" into "no".
+        return VERDICTS
+            .with(|v| v.borrow().get(&(hwnd as isize)).map(|(verdict, _)| *verdict))
+            .unwrap_or(false);
+    };
     let mut pid = 0u32;
-    unsafe { GetWindowThreadProcessId(front, &mut pid) };
-    pid != 0 && is_game_process(pid) && split_title(&window_title(front)).is_some()
+    unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+    let verdict = pid != 0 && is_game_process(pid) && split_title(&title).is_some();
+    remember(hwnd, verdict);
+    verdict
+}
+
+fn remember(hwnd: HWND, verdict: bool) {
+    VERDICTS.with(|v| {
+        v.borrow_mut()
+            .insert(hwnd as isize, (verdict, std::time::Instant::now()))
+    });
+}
+
+/// Forget windows that no longer exist, so the map cannot grow for the
+/// life of the process. Called from the same place the client list is
+/// refreshed, which is often enough and never on the hook path.
+pub fn forget_dead_windows() {
+    VERDICTS.with(|v| {
+        v.borrow_mut()
+            .retain(|handle, _| unsafe { IsWindow(*handle as HWND) != 0 })
+    });
 }
 
 /// The window in front right now, if it is a game window.
@@ -182,6 +323,7 @@ pub fn focus(hwnd: HWND) -> bool {
         if IsWindow(hwnd) == 0 {
             return false;
         }
+        note_switch(hwnd);
         if IsIconic(hwnd) != 0 {
             ShowWindow(hwnd, SW_RESTORE);
         }

@@ -270,6 +270,13 @@ unsafe extern "system" fn tray_proc(
             hook::act();
             0
         }
+        // A window the hook had never met. Deciding about it means reading
+        // the process image and the title, both of which can block, which
+        // is the whole reason it is decided HERE and not in the callback.
+        hook::WM_JUDGE => {
+            clients::judge(wparam as HWND);
+            0
+        }
         WM_COMMAND => {
             match (wparam & 0xFFFF) as usize {
                 MENU_ACCOUNTS => {

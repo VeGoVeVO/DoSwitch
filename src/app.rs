@@ -61,6 +61,18 @@ pub fn start(settings: Settings) {
     });
 }
 
+/// The same, refusing rather than panicking when the state is already
+/// borrowed or not started yet. The keyboard hook uses this one: its
+/// callback can be entered while the thread is inside a Win32 call that
+/// pumps messages, and a panic there takes the whole program down over a
+/// keystroke.
+pub fn try_with<T>(f: impl FnOnce(&mut App) -> T) -> Option<T> {
+    APP.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut borrow) => borrow.as_mut().map(f),
+        Err(_) => None,
+    })
+}
+
 pub fn with<T>(f: impl FnOnce(&mut App) -> T) -> T {
     APP.with(|cell| {
         let mut borrow = cell.borrow_mut();
@@ -73,7 +85,9 @@ pub fn language() -> Lang {
 }
 
 pub fn refresh() {
-    with(|app| app.clients = clients::list());
+    clients::forget_dead_windows();
+    let fresh = clients::list();
+    with(|app| app.clients = fresh);
 }
 
 pub fn save() {
