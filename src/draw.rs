@@ -164,6 +164,62 @@ impl Canvas {
         );
     }
 
+    /// A status dot with the soft halo the web panel gives it: the glow is
+    /// laid down first, wide and faint, then the solid dot on top. It is
+    /// the one detail that makes an idle green light look lit rather than
+    /// painted.
+    pub fn lit_dot(&self, cx: i32, cy: i32, radius: i32, color: u32) {
+        self.glow(cx, cy, radius * 3, color, 0.55);
+        self.dot(cx, cy, radius, color);
+    }
+
+    /// A soft circular glow, brightest at the centre and fading to nothing
+    /// at the edge, blended over what is there. Used for the header's leaf
+    /// light and for the lit status dots.
+    pub fn glow(&self, cx: i32, cy: i32, radius: i32, color: u32, strength: f32) {
+        if radius <= 0 {
+            return;
+        }
+        let pixels = self.slice();
+        let r = radius as f32;
+        let y0 = (cy - radius).max(0);
+        let y1 = (cy + radius).min(self.height);
+        let x0 = (cx - radius).max(0);
+        let x1 = (cx + radius).min(self.width);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let d = (((x - cx).pow(2) + (y - cy).pow(2)) as f32).sqrt();
+                if d >= r {
+                    continue;
+                }
+                // Squared falloff, so the centre reads as a light and the
+                // edge disappears into the surface rather than ringing it.
+                let t = (1.0 - d / r).powi(2) * strength;
+                let index = (y * self.width + x) as usize;
+                pixels[index] = mix(pixels[index], color, t);
+            }
+        }
+    }
+
+    /// A vertical gradient filling an area, top colour to bottom colour.
+    /// The header sits on one of these, which is most of why it reads as a
+    /// header rather than a band of flat colour.
+    pub fn vgradient(&self, area: R, top: u32, bottom: u32) {
+        let pixels = self.slice();
+        let y0 = area.t.max(0);
+        let y1 = area.b.min(self.height);
+        let x0 = area.l.max(0);
+        let x1 = area.r.min(self.width);
+        let span = (area.b - area.t).max(1) as f32;
+        for y in y0..y1 {
+            let t = (y - area.t) as f32 / span;
+            let colour = mix(top, bottom, t);
+            for x in x0..x1 {
+                pixels[(y * self.width + x) as usize] = colour;
+            }
+        }
+    }
+
     pub fn text(&self, text: &str, area: R, font: HFONT, color: u32, flags: u32) {
         unsafe {
             let old = SelectObject(self.dc, font as HGDIOBJ);

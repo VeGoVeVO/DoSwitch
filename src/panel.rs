@@ -415,8 +415,14 @@ unsafe fn paint(hwnd: HWND) {
     let hover = app::with(|state| state.hover);
 
     canvas.clear(INK);
-    canvas.round(R::new(0, 0, width, at(text.header)), at(14), mix(INK, SURFACE, 0.55));
-    canvas.round(R::new(0, at(text.header - 1), width, at(1)), 0, BORDER);
+    // The card outline, a faint leaf line the whole way round.
+    canvas.outline(R::new(0, 0, width, height), at(14), at(1), line(), INK);
+    // The header: a vertical raised-to-panel gradient with a leaf glow
+    // spilling from the top-left corner, exactly the web panel's header.
+    let head = R::new(1, 1, width - 2, at(text.header) - 1);
+    canvas.vgradient(head, RAISED, INK);
+    canvas.glow(at(2), at(2), at(text.header) + at(40), LEAF, 0.14);
+    canvas.round(R::new(0, at(text.header - 1), width, at(1)), 0, line_soft());
 
     // The header: logo, name of the panel, one line saying what it does.
     if let Some(logo) = logo.as_ref() {
@@ -448,21 +454,21 @@ unsafe fn paint(hwnd: HWND) {
         lang.column_character(),
         scaled(R::new(PAD + 18, columns_top, 240, 20), scale),
         fonts.column,
-        LEAF,
+        LEAF_DIM,
         DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
     );
     canvas.text(
         lang.column_order(),
         scaled(R::new(order_x, columns_top, ORDER_WIDTH, 20), scale),
         fonts.column,
-        MOSS,
+        LEAF_DIM,
         DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX,
     );
     canvas.text(
         lang.column_key(),
         scaled(R::new(key_x, columns_top, KEY_WIDTH, 20), scale),
         fonts.column,
-        MOSS,
+        LEAF_DIM,
         DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX,
     );
 
@@ -484,9 +490,9 @@ unsafe fn paint(hwnd: HWND) {
         let hovered = hover == Some(index);
         match &item.part {
             Part::Row { character, breed } => {
-                canvas.outline(area, at(12), at(1), BORDER,
+                canvas.outline(area, at(10), at(1), line_live(),
                                if hovered { RAISED } else { SURFACE });
-                canvas.dot(area.l + at(20), area.t + area.height() / 2, at(4), LEAF);
+                canvas.lit_dot(area.l + at(20), area.t + area.height() / 2, at(4), LEAF);
                 canvas.text(
                     character,
                     R { l: area.l + at(36), t: area.t + at(10), r: area.r, b: area.t + at(32) },
@@ -503,9 +509,9 @@ unsafe fn paint(hwnd: HWND) {
                 );
             }
             Part::NextRow => {
-                canvas.outline(area, at(12), at(1), mix(BORDER, GOLD, 0.35),
+                canvas.outline(area, at(10), at(1), line_gold(),
                                if hovered { RAISED } else { SURFACE });
-                canvas.dot(area.l + at(20), area.t + area.height() / 2, at(4), GOLD);
+                canvas.lit_dot(area.l + at(20), area.t + area.height() / 2, at(4), GOLD);
                 canvas.text(
                     lang.next_account(),
                     R { l: area.l + at(36), t: area.t + at(10), r: area.r, b: area.t + at(32) },
@@ -531,9 +537,9 @@ unsafe fn paint(hwnd: HWND) {
                 } else {
                     place.map(|n| n.to_string()).unwrap_or_else(|| "-".into())
                 };
-                let edge = if capturing { GOLD } else { BORDER };
-                canvas.outline(area, at(9), at(1), edge,
-                               if hovered || capturing { RAISED } else { INK });
+                let edge = if capturing { GOLD } else { line_soft() };
+                canvas.outline(area, at(8), at(1), edge,
+                               if hovered || capturing { RAISED } else { PILL });
                 canvas.text(
                     &label,
                     area,
@@ -546,13 +552,16 @@ unsafe fn paint(hwnd: HWND) {
                 let capturing = capture == Capture::Key(owner.clone());
                 let (label, colour) = pill_label(owner, lang, capturing);
                 let accent = if owner == NEXT { GOLD } else { LEAF };
+                let has_key = colour == LEAF || colour == GOLD;
                 let edge = if capturing {
                     GOLD
+                } else if has_key {
+                    mix(SURFACE, accent, 0.30)
                 } else {
-                    mix(BORDER, accent, 0.30)
+                    line_soft()
                 };
-                canvas.outline(area, at(9), at(1), edge,
-                               if hovered || capturing { RAISED } else { INK });
+                canvas.outline(area, at(8), at(1), edge,
+                               if hovered || capturing { RAISED } else { PILL });
                 canvas.text(
                     &label,
                     area,
@@ -565,7 +574,7 @@ unsafe fn paint(hwnd: HWND) {
                 // Three segments, the live one in leaf. Clicking anywhere
                 // on it moves to the next language round the ring, which
                 // is one target instead of three and reads the same.
-                canvas.outline(area, at(8), at(1), BORDER, if hovered { RAISED } else { INK });
+                canvas.outline(area, at(8), at(1), line_soft(), if hovered { RAISED } else { PILL });
                 let third = area.width() / 3;
                 for (index, one) in Lang::ALL.iter().enumerate() {
                     let slot = R {
@@ -580,14 +589,14 @@ unsafe fn paint(hwnd: HWND) {
             }
             Part::Refresh | Part::Done => {
                 let done = item.part == Part::Done;
-                let edge = if done { mix(BORDER, LEAF, 0.6) } else { BORDER };
-                let fill = if hovered { RAISED } else if done { mix(INK, MOSS, 0.5) } else { INK };
-                canvas.outline(area, at(9), at(1), edge, fill);
+                let edge = if done { mix(SURFACE, LEAF, 0.3) } else { line_soft() };
+                let fill = if hovered { RAISED } else { PILL };
+                canvas.outline(area, at(8), at(1), edge, fill);
                 canvas.text(
                     if done { lang.done() } else { lang.refresh() },
                     area,
                     fonts.button,
-                    if done { CREAM } else { MUTED },
+                    if done { LEAF } else { MUTED },
                     DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX,
                 );
             }
@@ -630,7 +639,7 @@ unsafe fn paint(hwnd: HWND) {
     // brighter while the pointer is over it.
     if let Some(bar) = scrollbar {
         let track = scaled(bar.track, scale);
-        canvas.round(track, track.width() / 2, mix(INK, BORDER, 0.8));
+        canvas.round(track, track.width() / 2, mix(INK, LEAF, 0.16));
         let thumb = scaled(bar.thumb, scale);
         let over = hover == Some(usize::MAX);
         canvas.round(thumb, thumb.width() / 2, if over { LEAF } else { mix(MOSS, LEAF, 0.5) });

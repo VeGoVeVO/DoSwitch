@@ -18,11 +18,12 @@ mod draw;
 mod hook;
 mod i18n;
 mod keys;
+mod menu;
 mod panel;
 mod store;
 mod theme;
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::*;
 use windows_sys::Win32::UI::Shell::*;
@@ -205,37 +206,42 @@ fn set_starts_with_windows(on: bool) {
 }
 
 unsafe fn show_menu(hwnd: HWND) {
+    // The tray menu is drawn in the app's own palette (src/menu.rs), not
+    // the grey Windows one, so nothing about the program looks borrowed.
     let lang = app::language();
-    let menu = CreatePopupMenu();
-    if menu.is_null() {
-        return;
-    }
-    AppendMenuW(menu, MF_STRING, MENU_ACCOUNTS, wide(lang.menu_accounts()).as_ptr());
-    AppendMenuW(
-        menu,
-        MF_STRING | if starts_with_windows() { MF_CHECKED } else { MF_UNCHECKED },
-        MENU_STARTUP,
-        wide(lang.menu_startup()).as_ptr(),
-    );
-    AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-    AppendMenuW(menu, MF_STRING, MENU_QUIT, wide(lang.menu_quit()).as_ptr());
-
-    let mut point: POINT = std::mem::zeroed();
-    GetCursorPos(&mut point);
-    // Windows keeps a menu open only for the foreground window; without
-    // this the menu appears and refuses to close on the first click away.
+    let entries = vec![
+        menu::Entry {
+            label: lang.menu_accounts().to_string(),
+            checked: false,
+            separator_above: false,
+            warn: false,
+        },
+        menu::Entry {
+            label: lang.menu_startup().to_string(),
+            checked: starts_with_windows(),
+            separator_above: false,
+            warn: false,
+        },
+        menu::Entry {
+            label: lang.menu_quit().to_string(),
+            checked: false,
+            separator_above: true,
+            warn: true,
+        },
+    ];
+    // The foreground has to be ours or the menu will not keep focus.
     SetForegroundWindow(hwnd);
-    TrackPopupMenu(
-        menu,
-        TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
-        point.x,
-        point.y,
-        0,
-        hwnd,
-        std::ptr::null(),
-    );
-    PostMessageW(hwnd, WM_NULL, 0, 0);
-    DestroyMenu(menu);
+    match menu::show(hwnd, entries) {
+        Some(0) => { let panel = app::with(|state| state.panel); panel::show(panel); }
+        Some(1) => {
+            let wanted = !starts_with_windows();
+            set_starts_with_windows(wanted);
+            app::with(|state| state.settings.startup = wanted);
+            app::save();
+        }
+        Some(2) => { PostQuitMessage(0); }
+        _ => {}
+    }
 }
 
 unsafe extern "system" fn tray_proc(
