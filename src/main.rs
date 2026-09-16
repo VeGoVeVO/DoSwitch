@@ -116,11 +116,11 @@ fn main() {
             );
         }
 
-        // The panel opens on the first run, when there is nothing saved to
-        // act on yet, and stays out of the way on every run after.
-        if app::with(|state| state.settings.accounts.is_empty()) {
-            panel::show(panel);
-        }
+        // Open the panel on EVERY launch, not just the first. Opening
+        // straight to the tray with no window made people think the app had
+        // not started; the panel comes up front, and Minimize sends it back
+        // to the tray where it keeps running.
+        panel::show(panel);
 
         let mut message: MSG = std::mem::zeroed();
         while GetMessageW(&mut message, std::ptr::null_mut(), 0, 0) > 0 {

@@ -123,7 +123,7 @@ impl Lang {
     }
 
     pub fn done(self) -> &'static str {
-        self.pick("Done", "Fermer", "Cerrar")
+        self.pick("Minimize", "Réduire", "Minimizar")
     }
 
     pub fn nothing_open(self) -> &'static str {
