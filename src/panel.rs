@@ -217,7 +217,9 @@ fn layout(lang: Lang, rows: &[(String, String)], text: Text, scroll: usize)
         live: true,
     });
     let _ = lang;
-    (items, y + 12 + 36 + 18, scrollbar)
+    // Room under the buttons for the build line, which paint draws bottom
+    // right on its own baseline rather than over the Done button.
+    (items, y + 12 + 36 + 30, scrollbar)
 }
 
 /// The furthest the list can be scrolled, in whole rows.
@@ -658,10 +660,12 @@ unsafe fn paint(hwnd: HWND) {
     }
 
     // The build, small and dim in the corner.
+    // The build, small and dim, bottom right on its own baseline BELOW the
+    // buttons - not over the Done button, where it used to collide.
     let version = concat!("v", env!("DOSWITCH_VERSION"));
     canvas.text(
         version,
-        scaled(R::new(WIDTH - PAD - 120, note_top + 12, 116, 36), scale),
+        scaled(R::new(WIDTH - PAD - 160, note_top + 42, 156, 18), scale),
         fonts.small,
         DIM,
         DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX,
