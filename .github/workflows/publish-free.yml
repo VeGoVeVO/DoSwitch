@@ -22,6 +22,7 @@ on:
     branches: [main]
     paths:
       - "src/**"
+      - "installer/**"
       - "assets/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -69,6 +70,19 @@ jobs:
           # Explorer shows is the one in the filename.
           DOSWITCH_BUILD: ${{ steps.version.outputs.build }}
 
+      # The installer is what a user downloads and what the silent
+      # self-update runs: per-user, no admin, and it closes and relaunches
+      # the app. The exe was built above; packaging only wraps it.
+      - name: Package the installer (Inno Setup)
+        shell: pwsh
+        run: |
+          Copy-Item target/release/DoSwitch.exe installer/DoSwitch.exe -Force
+          choco install innosetup -y --no-progress | Out-Null
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=${{ steps.version.outputs.version }}" "installer\DoSwitch.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+          Get-ChildItem installer\dist
+
       - name: Publish
         run: |
           npm init -y --silent
@@ -76,7 +90,7 @@ jobs:
           node tools/publish-release.mjs
         env:
           PRODUCT: free
-          MODULE_PATH: target/release/DoSwitch.exe
+          MODULE_PATH: installer/dist/DoSwitch-Setup.exe
           API_ORIGIN: ${{ secrets.API_ORIGIN || 'https://api.doswitchpro.com' }}
           MODULE_SIGNING_KEY: ${{ secrets.MODULE_SIGNING_KEY }}
           RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
@@ -90,7 +104,7 @@ jobs:
       - name: The served download is the file that was built
         shell: bash
         run: |
-          built=$(sha256sum target/release/DoSwitch.exe | cut -d' ' -f1)
+          built=$(sha256sum installer/dist/DoSwitch-Setup.exe | cut -d' ' -f1)
           curl -sSL --retry 5 --retry-delay 3 "$API_ORIGIN/api/v1/download/free" -o served.exe
           served=$(sha256sum served.exe | cut -d' ' -f1)
           echo "built  $built"; echo "served $served"

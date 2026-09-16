@@ -14,6 +14,8 @@
 
 mod app;
 mod clients;
+mod crypto;
+mod http;
 mod draw;
 mod hook;
 mod i18n;
@@ -21,6 +23,7 @@ mod keys;
 mod menu;
 mod panel;
 mod store;
+mod update;
 mod theme;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -75,6 +78,9 @@ fn main() {
             return;
         }
         add_tray_icon(tray);
+        // Update to a newer free build in the background, verified before
+        // it is ever run. Never blocks startup.
+        update::check_in_background();
         let panel = panel::create();
         app::with(|state| state.panel = panel);
 

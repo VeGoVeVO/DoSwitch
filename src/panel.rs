@@ -645,6 +645,16 @@ unsafe fn paint(hwnd: HWND) {
         canvas.round(thumb, thumb.width() / 2, if over { LEAF } else { mix(MOSS, LEAF, 0.5) });
     }
 
+    // The build, small and dim in the corner.
+    let version = concat!("v", env!("DOSWITCH_VERSION"));
+    canvas.text(
+        version,
+        scaled(R::new(WIDTH - PAD - 120, note_top + 12, 116, 36), scale),
+        fonts.small,
+        DIM,
+        DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX,
+    );
+
     canvas.blit_to(dc, 0, 0);
     EndPaint(hwnd, &paint_struct);
 }

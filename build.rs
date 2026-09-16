@@ -15,6 +15,15 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/logo.png");
     println!("cargo:rerun-if-changed=assets/icon.ico");
 
+    // The four-part version as a compile-time constant, shown in the panel.
+    println!("cargo:rerun-if-env-changed=DOSWITCH_BUILD");
+    let crate_version = env::var("CARGO_PKG_VERSION").expect("no CARGO_PKG_VERSION");
+    let build_number: u64 = env::var("DOSWITCH_BUILD")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    println!("cargo:rustc-env=DOSWITCH_VERSION={crate_version}.{build_number}");
+
     let out = env::var("OUT_DIR").expect("no OUT_DIR");
     let decoder = png::Decoder::new(
         fs::File::open("assets/logo.png").expect("assets/logo.png is missing"),
