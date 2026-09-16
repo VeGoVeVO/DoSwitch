@@ -71,6 +71,17 @@ fn main() {
             // second one: the user pressed the shortcut for a reason.
             let existing = FindWindowW(wide(TRAY_CLASS).as_ptr(), std::ptr::null());
             if !existing.is_null() {
+                // Hand the running copy the right to take the foreground before
+                // asking it to show the panel. Windows blocks a background
+                // process from SetForegroundWindow, so without this the panel
+                // opened BEHIND whatever the player was looking at - shown but
+                // invisible. THIS process was just launched, so it can pass
+                // that right on with AllowSetForegroundWindow.
+                let mut pid: u32 = 0;
+                GetWindowThreadProcessId(existing, &mut pid);
+                if pid != 0 {
+                    AllowSetForegroundWindow(pid);
+                }
                 PostMessageW(existing, WM_APP + 3, 0, 0);
             }
             return;

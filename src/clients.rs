@@ -330,6 +330,12 @@ pub fn to_foreground(hwnd: HWND) -> bool {
         if IsIconic(hwnd) != 0 {
             ShowWindow(hwnd, SW_RESTORE);
         }
+        // Raise ABOVE every ordinary window by flicking topmost on and back
+        // off - allowed even from the background, so the panel is at least
+        // visible even if the focus grab below is refused.
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
+        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
         let front = GetForegroundWindow();
         if front == hwnd {
             return true;
