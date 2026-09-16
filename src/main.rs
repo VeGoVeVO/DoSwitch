@@ -109,6 +109,10 @@ fn main() {
 
         hook::remove();
         remove_tray_icon(tray);
+        // Last thing before the process ends, with the exe about to be freed:
+        // apply a staged update if one is waiting. It installs silently and
+        // does not relaunch, so the next launch is simply the new version.
+        update::apply_staged();
     }
 }
 

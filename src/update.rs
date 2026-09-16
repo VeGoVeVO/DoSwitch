@@ -1,11 +1,21 @@
-//! Silent self-update, the same shape as the Pro app's.
+//! Seamless self-update: stage while running, apply on the way out.
 //!
-//! On startup, in the background, ask the licence server for the current
-//! free build (GET /api/v1/version?product=free). If it is newer, download
-//! the installer, and only if the bytes match BOTH the sha256 the server
-//! named AND an Ed25519 signature over them, run it silently. The installer
-//! is per-user, so no admin prompt, and it closes and relaunches the app
-//! itself. Any failure just leaves the app on the version it has.
+//! Nothing is applied while the app is running. On startup, in the
+//! background, it asks the licence server for the current free build
+//! (GET /api/v1/version?product=free). If it is newer it downloads the
+//! installer, checks it, and STAGES it - saved to disk beside a marker
+//! naming its version - without running anything. The app is never touched
+//! and never interrupted.
+//!
+//! When the player quits, `apply_staged` runs the staged installer silently:
+//! the exe is free to replace because the app is closing, and it does NOT
+//! relaunch. The next time they open the app it is already the new version,
+//! the way Chrome and the rest update, no interruption ever.
+//!
+//! Nothing unverified is ever staged: the download must match BOTH the sha256
+//! the server named AND an Ed25519 signature over its bytes before it is
+//! written to the staging path. The private half of that key lives only in
+//! CI, so a swapped installer cannot be forged.
 
 use std::os::windows::process::CommandExt;
 
@@ -17,26 +27,17 @@ const API: &str = match option_env!("DOSWITCH_API") {
     None => "https://api.doswitchpro.com",
 };
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const DETACHED_PROCESS: u32 = 0x0000_0008;
 
 pub fn check_in_background() {
     std::thread::spawn(|| {
-        if let Err(reason) = try_update() {
-            log(&format!("update check: {reason}"));
+        if let Err(reason) = try_stage() {
+            log(&format!("stage check: {reason}"));
         }
     });
 }
 
-fn try_update() -> Result<(), String> {
-    // A hard stop against an update loop. If a version is ever misconfigured
-    // - the exe reporting a lower version than it really is, say - the app
-    // would find a "newer" build, install it, be closed and relaunched by
-    // the installer, and do it all again on the next start. This makes that
-    // impossible: at most one update attempt per cooldown, whatever the
-    // versions say. A genuine update lands once and then matches, so this
-    // never delays a real one; a broken one cannot spin.
-    if recently_attempted() {
-        return Ok(());
-    }
+fn try_stage() -> Result<(), String> {
     let response = http::get(&format!("{API}/api/v1/version?product=free"))?;
     if response.status != 200 {
         return Err(format!("version endpoint answered {}", response.status));
@@ -45,14 +46,22 @@ fn try_update() -> Result<(), String> {
     let latest = field(&json, "version").ok_or("no version in the reply")?;
     let current = env!("DOSWITCH_VERSION");
     if !is_newer(&latest, current) {
-        log(&format!("update check: {current} is current (latest {latest})"));
+        // Up to date. Sweep away a staged installer left from an update that
+        // has since been applied, so it is never run twice.
+        clear_staged();
+        log(&format!("stage check: {current} is current (latest {latest})"));
+        return Ok(());
+    }
+    if staged_version().as_deref() == Some(latest.as_str()) {
+        // Already downloaded and waiting for the next quit.
+        log(&format!("stage check: {latest} already staged, waiting for quit"));
         return Ok(());
     }
     let url = field(&json, "url").ok_or("no url in the reply")?;
     let want_sha = field(&json, "sha256").ok_or("no sha256 in the reply")?;
     let signature_b64 = field(&json, "signature").ok_or("no signature in the reply")?;
 
-    log(&format!("update check: {latest} available, downloading"));
+    log(&format!("stage check: {latest} available, downloading"));
     let file = http::get(&url)?;
     if file.status != 200 {
         return Err(format!("download answered {}", file.status));
@@ -63,18 +72,34 @@ fn try_update() -> Result<(), String> {
     let signature = crypto::base64_decode(&signature_b64).ok_or("signature was not base64")?;
     crypto::verify_release(&file.body, &signature)?;
 
-    let mut path = std::env::temp_dir();
-    path.push(format!("DoSwitch-Setup-{latest}.exe"));
-    std::fs::write(&path, &file.body).map_err(|e| format!("could not save the installer: {e}"))?;
-
-    mark_attempt();
-    log(&format!("update check: verified {latest}, launching the installer"));
-    std::process::Command::new(&path)
-        .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|e| format!("could not launch the installer: {e}"))?;
+    let path = staged_path().ok_or("no staging path")?;
+    std::fs::write(&path, &file.body).map_err(|e| format!("could not stage the installer: {e}"))?;
+    set_staged_version(&latest);
+    log(&format!("stage check: staged {latest}, will apply on quit"));
     Ok(())
+}
+
+/// Run a staged update, if one is waiting, as the app is exiting. Called from
+/// the very end of the run - the tray is gone, the message loop is over, and
+/// the process is about to end, so the exe is free to be replaced. Silent and
+/// detached, and it does NOT relaunch: the update is simply in place for the
+/// next time the player opens the app.
+pub fn apply_staged() {
+    let Some(version) = staged_version() else { return };
+    let current = env!("DOSWITCH_VERSION");
+    if !is_newer(&version, current) {
+        clear_staged();
+        return;
+    }
+    let Some(path) = staged_path() else { return };
+    if !path.exists() {
+        return;
+    }
+    log(&format!("applying staged {version} on exit"));
+    let _ = std::process::Command::new(&path)
+        .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .spawn();
 }
 
 /// Compared field by field as numbers, so 1.0.0.9 is below 1.0.0.10.
@@ -104,44 +129,53 @@ fn field(json: &str, name: &str) -> Option<String> {
     Some(after[..end].to_string())
 }
 
-/// The marker the cooldown reads and writes: the unix time of the last
-/// update attempt. Beside the diary, best-effort - a machine that cannot
-/// read it simply gets one attempt, which is the safe direction.
-fn attempt_marker() -> Option<std::path::PathBuf> {
+/// The DoSwitch directory beside the diary, created if need be.
+fn state_dir() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA")?;
     let dir = std::path::Path::new(&base).join("DoSwitch");
     let _ = std::fs::create_dir_all(&dir);
-    Some(dir.join("last-update"))
+    Some(dir)
 }
 
-const UPDATE_COOLDOWN_SECS: u64 = 2 * 60 * 60;
-
-fn recently_attempted() -> bool {
-    let Some(path) = attempt_marker() else { return false };
-    let Ok(text) = std::fs::read_to_string(&path) else { return false };
-    let Ok(then) = text.trim().parse::<u64>() else { return false };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    now.saturating_sub(then) < UPDATE_COOLDOWN_SECS
+/// Where a downloaded-but-not-yet-applied installer waits.
+fn staged_path() -> Option<std::path::PathBuf> {
+    Some(state_dir()?.join("staged-free-update.exe"))
 }
 
-fn mark_attempt() {
-    if let Some(path) = attempt_marker() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let _ = std::fs::write(path, now.to_string());
+/// The marker naming which version is staged.
+fn staged_marker() -> Option<std::path::PathBuf> {
+    Some(state_dir()?.join("staged-free-version"))
+}
+
+fn staged_version() -> Option<String> {
+    let text = std::fs::read_to_string(staged_marker()?).ok()?;
+    let text = text.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+fn set_staged_version(version: &str) {
+    if let Some(marker) = staged_marker() {
+        let _ = std::fs::write(marker, version);
+    }
+}
+
+/// Forget a staged update, so a spent installer is never run twice.
+fn clear_staged() {
+    if let Some(path) = staged_path() {
+        let _ = std::fs::remove_file(path);
+    }
+    if let Some(marker) = staged_marker() {
+        let _ = std::fs::remove_file(marker);
     }
 }
 
 fn log(line: &str) {
     use std::io::Write;
-    let Some(base) = std::env::var_os("LOCALAPPDATA") else { return };
-    let dir = std::path::Path::new(&base).join("DoSwitch");
-    let _ = std::fs::create_dir_all(&dir);
+    let Some(dir) = state_dir() else { return };
     let path = dir.join("update.log");
     if let Ok(meta) = std::fs::metadata(&path) {
         if meta.len() > 128 * 1024 {

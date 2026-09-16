@@ -22,10 +22,14 @@ DefaultDirName={localappdata}\Programs\DoSwitch
 DefaultGroupName=DoSwitch
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-; For the silent self-update: close the running app before replacing it and
-; start it again after. Harmless on a first install.
+; For the silent self-update. The app stages the installer while it runs and
+; launches it only as it quits, so the exe is already being freed - but the
+; process may not be fully gone the instant the installer starts copying, so
+; CloseApplications lets the Restart Manager mop up any handle still open.
+; RestartApplications is OFF: the update is left in place for the next launch
+; rather than relaunched, which is the seamless, never-interrupt behaviour.
 CloseApplications=yes
-RestartApplications=yes
+RestartApplications=no
 OutputDir=dist
 OutputBaseFilename=DoSwitch-Setup
 Compression=lzma2/max
