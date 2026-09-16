@@ -401,8 +401,20 @@ unsafe fn paint(hwnd: HWND) {
     let text = measure_text(scale, lang);
     let scroll = app::with(|state| state.scroll);
     let (items, logical_height, scrollbar) = layout(lang, &rows, text, scroll);
-    let width = (WIDTH as f32 * scale).round() as i32;
-    let height = (logical_height as f32 * scale).round() as i32;
+    // Paint the WHOLE client rect, not the height the layout worked out.
+    // The window is sized to that height elsewhere, but the two paths round
+    // the DPI scale independently and a mid-animation resize can arrive
+    // before the size settles - so the client can be a pixel or two taller
+    // than the layout says. The class brush erases nothing (WM_ERASEBKGND is
+    // a no-op on the promise that paint covers everything), so any strip the
+    // canvas fails to cover is left showing whatever was behind the window:
+    // the desktop, a terminal, the account it just left. Sizing the canvas
+    // to the real client rect keeps that promise true - clear(INK) fills
+    // every pixel the window owns and the blit copies every one back.
+    let mut rc: RECT = std::mem::zeroed();
+    GetClientRect(hwnd, &mut rc);
+    let width = (rc.right - rc.left).max(1);
+    let height = (rc.bottom - rc.top).max(1);
 
     let Some(canvas) = Canvas::new(dc, width, height) else {
         EndPaint(hwnd, &paint_struct);
