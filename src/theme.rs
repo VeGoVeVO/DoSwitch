@@ -11,17 +11,25 @@
 //! precomputed with `mix` against the surface they sit on, which is what
 //! the eye was going to see anyway.
 
-pub const INK: u32 = 0x121811; // --panel, the card
-pub const SURFACE: u32 = 0x161d14; // --row
-pub const RAISED: u32 = 0x192117; // --raised, the header top and hovers
-pub const PILL: u32 = 0x101609; // the key and order fields
-pub const LEAF: u32 = 0xa8d800;
-pub const LEAF_DIM: u32 = 0x78a010; // column headings
+pub const INK: u32 = 0x0c110a; // --panel, the card - deep near-black green,
+// like the new logo's ground, so the lime reads as a light on top of it
+pub const SURFACE: u32 = 0x131a11; // --row
+pub const RAISED: u32 = 0x182115; // --raised, the header top and hovers
+pub const PILL: u32 = 0x0d1408; // the key and order fields
+pub const LEAF: u32 = 0xb4e61e; // the logo's vibrant lime
+pub const LEAF_DIM: u32 = 0x7fac14; // column headings
 pub const MOSS: u32 = 0x407010;
 pub const CREAM: u32 = 0xf8f0c8;
 pub const GOLD: u32 = 0xf8b000;
 pub const MUTED: u32 = 0x98a48c; // --text-muted
 pub const DIM: u32 = 0x5d6b52;
+
+// The two atmosphere lights behind the card, from the site shader's resting
+// palette: lime from the top-left, teal-green from the bottom-right, both
+// faint over the deep ground. The lightweight CPU-drawn stand-in for the
+// site's WebGL background - radial glows painted once per repaint.
+pub const GLOW_LIME: u32 = 0xa8d800;
+pub const GLOW_TEAL: u32 = 0x12825a;
 
 pub const fn colorref(rgb: u32) -> u32 {
     ((rgb & 0xFF) << 16) | (rgb & 0xFF00) | ((rgb >> 16) & 0xFF)

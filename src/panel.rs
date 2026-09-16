@@ -49,7 +49,7 @@ const MAX_VISIBLE_ROWS: usize = 6;
 const SCROLLBAR_GUTTER: i32 = 16;
 const SCROLLBAR_WIDTH: i32 = 6;
 const SUBTITLE_TOP: i32 = 48;
-const SUBTITLE_WIDTH: i32 = WIDTH - PAD * 2 - 66 - 114;
+const SUBTITLE_WIDTH: i32 = WIDTH - PAD * 2 - 122 - 114;
 
 #[derive(Clone, PartialEq)]
 pub enum Part {
@@ -261,7 +261,7 @@ fn measure_text(scale: f32, lang: Lang) -> Text {
                 forward(SUBTITLE_WIDTH),
                 fonts.subtitle,
             ));
-            Text { header: (SUBTITLE_TOP + subtitle + 16).max(96), note }
+            Text { header: (SUBTITLE_TOP + subtitle + 16).max(100), note }
         }
         None => Text { header: 96, note: 48 },
     };
@@ -434,6 +434,14 @@ unsafe fn paint(hwnd: HWND) {
     let hover = app::with(|state| state.hover);
 
     canvas.clear(INK);
+    // Two faint lights behind the card - the site shader's resting palette as
+    // two cheap radial glows: lime from the top-left, teal from the
+    // bottom-right, with a cool spark low-left. Painted once per repaint,
+    // nothing animated - the very-lightweight stand-in for the site's WebGL
+    // background, dim enough that the rows and text keep their contrast.
+    canvas.glow(width * 16 / 100, height * 10 / 100, (width * 95 / 100).max(1), GLOW_LIME, 0.16);
+    canvas.glow(width * 88 / 100, height * 86 / 100, (width * 95 / 100).max(1), GLOW_TEAL, 0.22);
+    canvas.glow(width * 8 / 100, height * 70 / 100, (width * 60 / 100).max(1), GLOW_TEAL, 0.12);
     // The card outline, a faint leaf line the whole way round.
     canvas.outline(R::new(0, 0, width, height), at(14), at(1), line(), INK);
     // The header: a vertical raised-to-panel gradient with a leaf glow
@@ -445,11 +453,11 @@ unsafe fn paint(hwnd: HWND) {
 
     // The header: logo, name of the panel, one line saying what it does.
     if let Some(logo) = logo.as_ref() {
-        logo.draw(&canvas, scaled(R::new(PAD - 4, 18, 62, 58), scale));
+        logo.draw(&canvas, scaled(R::new(PAD - 6, 12, 118, 74), scale));
     }
     canvas.text(
         lang.title(),
-        scaled(R::new(PAD + 66, 22, 400, 26), scale),
+        scaled(R::new(PAD + 122, 22, 300, 26), scale),
         fonts.title,
         CREAM,
         DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
@@ -457,7 +465,7 @@ unsafe fn paint(hwnd: HWND) {
     canvas.text(
         lang.subtitle(),
         scaled(
-            R::new(PAD + 66, SUBTITLE_TOP, SUBTITLE_WIDTH, text.header - SUBTITLE_TOP),
+            R::new(PAD + 122, SUBTITLE_TOP, SUBTITLE_WIDTH, text.header - SUBTITLE_TOP),
             scale,
         ),
         fonts.subtitle,
