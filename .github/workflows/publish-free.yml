@@ -84,10 +84,7 @@ jobs:
           Get-ChildItem installer\dist
 
       - name: Publish
-        run: |
-          npm init -y --silent
-          npm install --silent libsodium-wrappers@0.7.15
-          node tools/publish-release.mjs
+        run: node tools/publish-release.mjs
         env:
           PRODUCT: free
           MODULE_PATH: installer/dist/DoSwitch-Setup.exe
