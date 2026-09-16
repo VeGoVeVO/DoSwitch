@@ -44,7 +44,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       # The version the release is published under, and therefore the name
       # the browser saves. Cargo.toml's version plus the run number reads
