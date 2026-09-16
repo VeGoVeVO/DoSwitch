@@ -45,6 +45,16 @@ const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "DoSwitch";
 
 fn main() {
+    // Before anything else - before the single-instance mutex, before any
+    // window - apply a staged update if one is waiting. Doing it at the start
+    // of every launch is what makes the update reliable: it does not depend on
+    // a clean exit, so however the last session ended the new build lands on
+    // the next launch. If it launches the installer, this throwaway instance
+    // must get out of the way at once so the exe can be replaced.
+    if update::apply_staged_on_startup() {
+        return;
+    }
+
     unsafe {
         // One copy at a time. Two would fight over the same keys, and the
         // second would look like the first having stopped working.
@@ -109,10 +119,6 @@ fn main() {
 
         hook::remove();
         remove_tray_icon(tray);
-        // Last thing before the process ends, with the exe about to be freed:
-        // apply a staged update if one is waiting. It installs silently and
-        // does not relaunch, so the next launch is simply the new version.
-        update::apply_staged();
     }
 }
 

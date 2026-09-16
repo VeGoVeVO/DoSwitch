@@ -79,27 +79,44 @@ fn try_stage() -> Result<(), String> {
     Ok(())
 }
 
-/// Run a staged update, if one is waiting, as the app is exiting. Called from
-/// the very end of the run - the tray is gone, the message loop is over, and
-/// the process is about to end, so the exe is free to be replaced. Silent and
-/// detached, and it does NOT relaunch: the update is simply in place for the
-/// next time the player opens the app.
-pub fn apply_staged() {
-    let Some(version) = staged_version() else { return };
+/// Apply a staged update at STARTUP, before this instance does anything else.
+/// Returns true if it launched the installer, in which case main MUST return
+/// at once so the exe is free to be replaced: the installer closes this
+/// just-started instance, swaps the exe, and relaunches the app (the [Run]
+/// entry in the .iss).
+///
+/// On startup, NOT on exit. An exit is not guaranteed to run any code - a
+/// killed or crashed process runs no cleanup, so a stage-on-exit update never
+/// lands. A startup always happens, so the update lands on the next launch no
+/// matter how the last session ended.
+///
+/// Guarded against a loop: if the installer was already run for this exact
+/// staged version and the running build is STILL older, the install did not
+/// take, so it is not tried again. Even if the relaunch never happens the exe
+/// is replaced, so the next manual launch is simply the new version.
+pub fn apply_staged_on_startup() -> bool {
+    let Some(version) = staged_version() else { return false };
     let current = env!("DOSWITCH_VERSION");
     if !is_newer(&version, current) {
         clear_staged();
-        return;
+        clear_attempt();
+        return false;
     }
-    let Some(path) = staged_path() else { return };
+    if attempt_version().as_deref() == Some(version.as_str()) {
+        log(&format!("staged {version} did not apply last time; running {current}"));
+        return false;
+    }
+    let Some(path) = staged_path() else { return false };
     if !path.exists() {
-        return;
+        return false;
     }
-    log(&format!("applying staged {version} on exit"));
-    let _ = std::process::Command::new(&path)
+    set_attempt(&version);
+    log(&format!("applying staged {version} on startup"));
+    std::process::Command::new(&path)
         .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
         .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
-        .spawn();
+        .spawn()
+        .is_ok()
 }
 
 /// Compared field by field as numbers, so 1.0.0.9 is below 1.0.0.10.
@@ -169,6 +186,34 @@ fn clear_staged() {
         let _ = std::fs::remove_file(path);
     }
     if let Some(marker) = staged_marker() {
+        let _ = std::fs::remove_file(marker);
+    }
+}
+
+/// The version the startup-apply last ran the installer for - the loop guard,
+/// so a staged update that fails to install is not retried every launch.
+fn attempt_marker() -> Option<std::path::PathBuf> {
+    Some(state_dir()?.join("staged-free-attempt"))
+}
+
+fn attempt_version() -> Option<String> {
+    let text = std::fs::read_to_string(attempt_marker()?).ok()?;
+    let text = text.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+fn set_attempt(version: &str) {
+    if let Some(marker) = attempt_marker() {
+        let _ = std::fs::write(marker, version);
+    }
+}
+
+fn clear_attempt() {
+    if let Some(marker) = attempt_marker() {
         let _ = std::fs::remove_file(marker);
     }
 }
