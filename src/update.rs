@@ -27,6 +27,16 @@ pub fn check_in_background() {
 }
 
 fn try_update() -> Result<(), String> {
+    // A hard stop against an update loop. If a version is ever misconfigured
+    // - the exe reporting a lower version than it really is, say - the app
+    // would find a "newer" build, install it, be closed and relaunched by
+    // the installer, and do it all again on the next start. This makes that
+    // impossible: at most one update attempt per cooldown, whatever the
+    // versions say. A genuine update lands once and then matches, so this
+    // never delays a real one; a broken one cannot spin.
+    if recently_attempted() {
+        return Ok(());
+    }
     let response = http::get(&format!("{API}/api/v1/version?product=free"))?;
     if response.status != 200 {
         return Err(format!("version endpoint answered {}", response.status));
@@ -57,6 +67,7 @@ fn try_update() -> Result<(), String> {
     path.push(format!("DoSwitch-Setup-{latest}.exe"));
     std::fs::write(&path, &file.body).map_err(|e| format!("could not save the installer: {e}"))?;
 
+    mark_attempt();
     log(&format!("update check: verified {latest}, launching the installer"));
     std::process::Command::new(&path)
         .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
@@ -91,6 +102,39 @@ fn field(json: &str, name: &str) -> Option<String> {
     let after = after.strip_prefix('"')?;
     let end = after.find('"')?;
     Some(after[..end].to_string())
+}
+
+/// The marker the cooldown reads and writes: the unix time of the last
+/// update attempt. Beside the diary, best-effort - a machine that cannot
+/// read it simply gets one attempt, which is the safe direction.
+fn attempt_marker() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA")?;
+    let dir = std::path::Path::new(&base).join("DoSwitch");
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join("last-update"))
+}
+
+const UPDATE_COOLDOWN_SECS: u64 = 2 * 60 * 60;
+
+fn recently_attempted() -> bool {
+    let Some(path) = attempt_marker() else { return false };
+    let Ok(text) = std::fs::read_to_string(&path) else { return false };
+    let Ok(then) = text.trim().parse::<u64>() else { return false };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    now.saturating_sub(then) < UPDATE_COOLDOWN_SECS
+}
+
+fn mark_attempt() {
+    if let Some(path) = attempt_marker() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = std::fs::write(path, now.to_string());
+    }
 }
 
 fn log(line: &str) {
