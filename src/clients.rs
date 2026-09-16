@@ -317,6 +317,43 @@ pub fn focused_window() -> Option<HWND> {
     }
 }
 
+/// Bring one of OUR OWN windows - the panel - to the front, through the same
+/// foreground lock that blocks a client switch. A bare SetForegroundWindow is
+/// refused while another app owns the foreground (the player is in Chrome,
+/// say), and the panel opens BEHIND it: shown, but invisible, which reads as
+/// "I restarted and see nothing". This forces it in front instead.
+pub fn to_foreground(hwnd: HWND) -> bool {
+    unsafe {
+        if IsWindow(hwnd) == 0 {
+            return false;
+        }
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+        let front = GetForegroundWindow();
+        if front == hwnd {
+            return true;
+        }
+        let ours = GetCurrentThreadId();
+        let theirs = if front.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(front, std::ptr::null_mut())
+        };
+        let attached = theirs != 0 && theirs != ours && AttachThreadInput(ours, theirs, 1) != 0;
+        SetForegroundWindow(hwnd);
+        BringWindowToTop(hwnd);
+        SetFocus(hwnd);
+        if attached {
+            AttachThreadInput(ours, theirs, 0);
+        }
+        if GetForegroundWindow() != hwnd {
+            SwitchToThisWindow(hwnd, 1);
+        }
+        GetForegroundWindow() == hwnd
+    }
+}
+
 /// Put a window in front. Returns whether it actually got there.
 pub fn focus(hwnd: HWND) -> bool {
     unsafe {

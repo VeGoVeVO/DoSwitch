@@ -361,9 +361,14 @@ pub fn show(hwnd: HWND) {
         let x = work.left + ((work.right - work.left) - width) / 2;
         let y = work.top + ((work.bottom - work.top) - height) / 2;
 
-        SetWindowPos(hwnd, std::ptr::null_mut(), x, y, width, height, SWP_NOZORDER);
+        // Raise to the top (no SWP_NOZORDER) and force the foreground through
+        // the lock, so a panel shown while the player is in another window - a
+        // second launch posting "show the panel", a tray click - actually
+        // appears instead of opening behind that window and looking like
+        // nothing happened.
+        SetWindowPos(hwnd, std::ptr::null_mut(), x, y, width, height, SWP_SHOWWINDOW);
         ShowWindow(hwnd, SW_SHOW);
-        SetForegroundWindow(hwnd);
+        crate::clients::to_foreground(hwnd);
         InvalidateRect(hwnd, std::ptr::null(), 0);
     }
 }
