@@ -97,6 +97,23 @@ def write_png(path, width, height, rgba):
     )
 
 
+def unpainted_row(width, height, rgba):
+    """The first row the painter never covered, or None when there is none.
+
+    round_corners below only touches ALPHA, so a black strip survives it
+    looking like a deliberate border - which is how twenty black rows along
+    the bottom of the shipped panel sat on the site unnoticed. The exe
+    refuses to write one of these now; this is the second lock, and unlike
+    the first it also catches a BMP that was already on disk.
+    """
+    for y in range(height):
+        row = rgba[y * width * 4:(y + 1) * width * 4]
+        if all(row[i] == 0 and row[i + 1] == 0 and row[i + 2] == 0
+               for i in range(0, len(row), 4)):
+            return y
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--exe", default=EXE)
@@ -126,6 +143,14 @@ def main():
         if done.returncode != 0:
             raise SystemExit(f"panel snapshot failed for {lang}: exit {done.returncode}")
         width, height, rgba = read_bmp(bmp)
+        blank = unpainted_row(width, height, rgba)
+        if blank is not None:
+            raise SystemExit(
+                f"{lang}: row {blank} of {height} is pure black - the capture caught a "
+                "strip the painter never covered. The panel clears to INK and paints "
+                "over it, so no row it draws is black. Not shipping it: this is exactly "
+                "how a black bottom border reached the site once already."
+            )
         rgba = round_corners(width, height, rgba, CORNER_RADIUS)
         png = os.path.join(args.out, f"panel-{lang}.png")
         write_png(png, width, height, rgba)

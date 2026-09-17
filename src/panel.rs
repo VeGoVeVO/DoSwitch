@@ -485,8 +485,21 @@ pub fn snapshot(path: &str) -> bool {
             std::thread::sleep(std::time::Duration::from_millis(8));
         }
 
+        // The CLIENT rect, not the window rect: the painter fills the client
+        // rect and promises nothing outside it (WM_ERASEBKGND is a no-op on
+        // exactly that promise), so a capture sized to anything larger copies
+        // rows nobody ever wrote - which come out pure black, because that is
+        // what a fresh DIB section holds.
+        //
+        // And repaint synchronously first. The pump above lets a queued paint
+        // land, but a resize that arrives late leaves the window at its new
+        // size with the old, shorter picture still on it, and PrintWindow
+        // copies that: the window is right, the paint is stale, and the strip
+        // between them is black.
+        RedrawWindow(hwnd, std::ptr::null(), std::ptr::null_mut(), RDW_INVALIDATE | RDW_UPDATENOW);
+
         let mut rc: RECT = std::mem::zeroed();
-        GetWindowRect(hwnd, &mut rc);
+        GetClientRect(hwnd, &mut rc);
         let width = rc.right - rc.left;
         let height = rc.bottom - rc.top;
         if width <= 0 || height <= 0 {
@@ -514,6 +527,28 @@ pub fn snapshot(path: &str) -> bool {
 
         let size = (width * height * 4) as usize;
         let pixels = std::slice::from_raw_parts(bits as *const u8, size);
+
+        // Refuse to write a picture with a strip nobody painted. The panel
+        // clears to INK and paints over it, so no pixel it draws is pure
+        // black; a whole row of it means the capture caught ground the
+        // painter never covered. A snapshot like that once went out to the
+        // site with twenty black rows along its bottom edge and stayed
+        // there, because everything reported success and the corners were
+        // even rounded - out of the black.
+        let unpainted = (0..height).any(|row| {
+            let from = (row * width * 4) as usize;
+            pixels[from..from + (width * 4) as usize]
+                .chunks_exact(4)
+                .all(|px| px[0] == 0 && px[1] == 0 && px[2] == 0)
+        });
+        if unpainted {
+            SelectObject(memory, old);
+            DeleteObject(bitmap as HGDIOBJ);
+            DeleteDC(memory);
+            ReleaseDC(std::ptr::null_mut(), screen);
+            return false;
+        }
+
         let stride = (width * 4) as u32;
         let mut file: Vec<u8> = Vec::with_capacity(size + 54);
         file.extend_from_slice(b"BM");
