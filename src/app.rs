@@ -23,6 +23,11 @@ pub enum Capture {
     Key(String),
     /// A number for this character's place in the order.
     Order(String),
+    /// This character's initiative, as it is being typed. Order takes one
+    /// digit and is done; an initiative runs to four, so the digits are
+    /// gathered here and only reach the settings on Enter - which is also
+    /// what makes an empty entry a way to clear it again.
+    Initiative { owner: String, typed: String },
 }
 
 pub struct App {
@@ -131,6 +136,67 @@ pub fn set_order(character: &str, wanted: u32) {
     });
 }
 
+/// Remember a character's initiative, or forget it when `value` is None.
+/// It changes nothing else on its own: the order is only rewritten when
+/// the player asks for it, in `order_by_initiative`.
+pub fn set_initiative(character: &str, value: Option<u32>) {
+    with(|app| {
+        app.settings.account(character).initiative = value;
+        store::save(&app.settings);
+    });
+}
+
+/// The order the initiatives ask for, from the order the list is in now.
+/// Highest initiative plays first.
+///
+/// Only the characters that HAVE an initiative move, and they are dealt
+/// back into the places they already occupied between them. A character
+/// with no initiative is not slow, it is unknown - sweeping the unknown
+/// ones to the back would be inventing an answer out of a blank field,
+/// and the player would have no way to tell that from a real reading.
+///
+/// Pure, and takes its numbers through a closure, so the rule can be
+/// tested without a window, a settings file or a running game.
+fn by_initiative(names: &[String], initiative: impl Fn(&str) -> Option<u32>) -> Vec<String> {
+    let slots: Vec<usize> = (0..names.len())
+        .filter(|&index| initiative(&names[index]).is_some())
+        .collect();
+    // Ties keep the order they were already in - sort_by_key is stable, and
+    // two characters on the same initiative really are in either order.
+    let mut movers: Vec<String> = slots.iter().map(|&index| names[index].clone()).collect();
+    movers.sort_by_key(|name| std::cmp::Reverse(initiative(name).unwrap_or(0)));
+
+    let mut sorted = names.to_vec();
+    for (slot, name) in slots.iter().zip(movers) {
+        sorted[*slot] = name;
+    }
+    sorted
+}
+
+/// Put the team in turn order from the initiatives, and save it.
+///
+/// True when the order actually changed, so a click that would do nothing
+/// neither rewrites the settings file nor claims to have done something.
+pub fn order_by_initiative() -> bool {
+    with(|app| {
+        let names: Vec<String> = ordered(app).iter().map(|c| c.character.clone()).collect();
+        let sorted = by_initiative(&names, |name| {
+            app.settings
+                .accounts
+                .get(name)
+                .and_then(|account| account.initiative)
+        });
+        if sorted == names {
+            return false;
+        }
+        for (index, name) in sorted.iter().enumerate() {
+            app.settings.account(name).order = Some(index as u32 + 1);
+        }
+        store::save(&app.settings);
+        true
+    })
+}
+
 pub fn set_key(character: &str, bind: Bind) {
     with(|app| {
         app.settings.take_key(bind, Some(character));
@@ -194,6 +260,64 @@ pub fn switch_to(character: &str) -> bool {
         }
     };
     clients::focus(hwnd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| name.to_string()).collect()
+    }
+
+    fn table(pairs: &[(&'static str, u32)]) -> impl Fn(&str) -> Option<u32> {
+        let pairs = pairs.to_vec();
+        move |name: &str| {
+            pairs
+                .iter()
+                .find(|(who, _)| *who == name)
+                .map(|(_, value)| *value)
+        }
+    }
+
+    #[test]
+    fn the_fastest_plays_first() {
+        let sorted = by_initiative(
+            &names(&["slow", "fast", "middling"]),
+            table(&[("slow", 700), ("fast", 1200), ("middling", 900)]),
+        );
+        assert_eq!(sorted, names(&["fast", "middling", "slow"]));
+    }
+
+    /// The point of the whole rule: a character nobody typed a number for
+    /// is unknown, not slow. It keeps the slot it had, and the ones that
+    /// ARE known sort among the slots they had between them.
+    #[test]
+    fn a_character_with_no_number_does_not_move() {
+        let sorted = by_initiative(
+            &names(&["slow", "unknown", "fast"]),
+            table(&[("slow", 700), ("fast", 1200)]),
+        );
+        assert_eq!(sorted, names(&["fast", "unknown", "slow"]));
+    }
+
+    #[test]
+    fn equal_initiatives_keep_the_order_they_had() {
+        let sorted = by_initiative(
+            &names(&["first", "second"]),
+            table(&[("first", 900), ("second", 900)]),
+        );
+        assert_eq!(sorted, names(&["first", "second"]));
+    }
+
+    /// Nothing to sort is not an error, and it is not a reordering either -
+    /// the caller reads "unchanged" and leaves the settings file alone.
+    #[test]
+    fn nothing_to_go_on_changes_nothing() {
+        let list = names(&["a", "b", "c"]);
+        assert_eq!(by_initiative(&list, table(&[])), list);
+        assert_eq!(by_initiative(&[], table(&[("a", 1)])), Vec::<String>::new());
+    }
 }
 
 /// The next window in the player's order, starting from whichever is in

@@ -23,6 +23,11 @@ use crate::keys::Bind;
 pub struct Account {
     pub key: Option<Bind>,
     pub order: Option<u32>,
+    /// The character's initiative, typed in by hand. None means the player
+    /// never told us, which is NOT the same as zero: the panel says "-"
+    /// and leaves this character out of any sort, rather than deciding
+    /// that a number nobody entered means it plays last.
+    pub initiative: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -117,6 +122,7 @@ pub fn load(fallback: Lang) -> Settings {
                 Account {
                     key: entry["key"].as_str().and_then(Bind::parse),
                     order: entry["order"].as_u64().map(|n| n as u32),
+                    initiative: entry["initiative"].as_u64().map(|n| n as u32),
                 },
             );
         }
@@ -148,7 +154,7 @@ pub fn save(settings: &Settings) {
 
     let mut accounts = serde_json::Map::new();
     for (name, account) in &settings.accounts {
-        if account.key.is_none() && account.order.is_none() {
+        if account.key.is_none() && account.order.is_none() && account.initiative.is_none() {
             continue;
         }
         accounts.insert(
@@ -156,6 +162,7 @@ pub fn save(settings: &Settings) {
             json!({
                 "key": account.key.map(|b| b.name()),
                 "order": account.order,
+                "initiative": account.initiative,
             }),
         );
     }

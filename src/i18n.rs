@@ -61,6 +61,12 @@ impl Lang {
         self.pick("ORDER", "ORDRE", "ORDEN")
     }
 
+    /// Also the button that sorts by it, which is why it is a heading the
+    /// pointer lights up rather than a label.
+    pub fn column_initiative(self) -> &'static str {
+        self.pick("INITIATIVE", "INITIATIVE", "INICIATIVA")
+    }
+
     pub fn column_key(self) -> &'static str {
         self.pick("KEY", "TOUCHE", "TECLA")
     }
@@ -79,9 +85,9 @@ impl Lang {
 
     pub fn note(self) -> &'static str {
         self.pick(
-            "Order is yours to set: lowest number plays first, and the Next account key walks it. Click a key to change it, click an order number and type a new one.",
-            "L'ordre est le v\u{f4}tre: le plus petit num\u{e9}ro joue en premier, et la touche Compte suivant le parcourt. Cliquez une touche pour la changer, cliquez un num\u{e9}ro d'ordre et tapez-en un autre.",
-            "El orden lo decides t\u{fa}: el n\u{fa}mero m\u{e1}s bajo juega primero, y la tecla Cuenta siguiente lo recorre. Haz clic en una tecla para cambiarla, haz clic en un n\u{fa}mero de orden y escribe otro.",
+            "Order is yours to set: lowest number plays first, and the Next account key walks it. Click a key to change it, click an order number and type a new one. Initiative is optional - type each one once, then click INITIATIVE to put the team in turn order.",
+            "L'ordre est le v\u{f4}tre: le plus petit num\u{e9}ro joue en premier, et la touche Compte suivant le parcourt. Cliquez une touche pour la changer, cliquez un num\u{e9}ro d'ordre et tapez-en un autre. L'initiative est facultative: saisissez-la une fois par personnage, puis cliquez INITIATIVE pour ranger l'\u{e9}quipe dans l'ordre des tours.",
+            "El orden lo decides t\u{fa}: el n\u{fa}mero m\u{e1}s bajo juega primero, y la tecla Cuenta siguiente lo recorre. Haz clic en una tecla para cambiarla, haz clic en un n\u{fa}mero de orden y escribe otro. La iniciativa es opcional: escr\u{ed}bela una vez por personaje y haz clic en INICIATIVA para ordenar al equipo por turnos.",
         )
     }
 
@@ -91,6 +97,15 @@ impl Lang {
 
     pub fn type_a_number(self) -> &'static str {
         self.pick("type 1 to 9", "tapez 1 \u{e0} 9", "escribe 1 a 9")
+    }
+
+    /// The initiative pill while it is waiting and nothing has been typed.
+    /// It has to name the key that COMMITS: an order number is one digit
+    /// and finishes itself, an initiative is not, so a player who typed
+    /// their number and clicked away would otherwise lose it without ever
+    /// being told there was a step left.
+    pub fn type_initiative(self) -> &'static str {
+        self.pick("type, Enter", "tapez, Entr\u{e9}e", "escribe, Intro")
     }
 
     pub fn unbound(self) -> &'static str {

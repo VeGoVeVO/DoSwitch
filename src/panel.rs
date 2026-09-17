@@ -33,13 +33,17 @@ use crate::store::NEXT;
 use crate::theme::*;
 
 const CLASS: &str = "DoSwitchPanel";
-const WIDTH: i32 = 620;
+// 720 rather than the 620 this was before the initiative column: a fourth
+// column taken out of the old width left the character name about 150
+// logical pixels, which is short enough to clip an ordinary Dofus name.
+const WIDTH: i32 = 720;
 const PAD: i32 = 22;
 const ROW_HEIGHT: i32 = 62;
 const ROW_GAP: i32 = 8;
 const PILL_HEIGHT: i32 = 34;
 const KEY_WIDTH: i32 = 160;
 const ORDER_WIDTH: i32 = 90;
+const INIT_WIDTH: i32 = 92;
 /// The class emblem at the front of a row, in the place the status dot
 /// used to have to itself.
 const EMBLEM: i32 = 24;
@@ -60,6 +64,14 @@ pub enum Part {
     NextRow,
     KeyPill { owner: String },
     OrderPill { owner: String },
+    /// The character's initiative, typed in by hand. Optional: unset is a
+    /// dash and changes nothing.
+    InitPill { owner: String },
+    /// The INITIATIVE heading, which is also the button that rewrites the
+    /// order from those numbers. A column of numbers answers "how fast is
+    /// this one"; the question actually being asked is "who plays first",
+    /// and only the list being IN that order answers it at a glance.
+    SortInitiative,
     Refresh,
     Done,
     /// The header toggle for self-updates, where the language switcher used
@@ -148,11 +160,36 @@ fn layout(lang: Lang, rows: &[(String, String)], text: Text, scroll: usize)
     let inner = WIDTH - PAD * 2 - gutter;
     let key_x = WIDTH - PAD - 14 - gutter - KEY_WIDTH;
     let order_x = key_x - 20 - ORDER_WIDTH;
+    let init_x = order_x - 20 - INIT_WIDTH;
 
     items.push(Item {
         area: R::new(WIDTH - PAD - 118, 24, 118, 28),
         part: Part::AutoUpdate,
         live: true,
+    });
+
+    // The heading doubles as the sort button, so it is an item with a
+    // rectangle rather than text paint puts wherever it likes - the click
+    // and the word are then the same pixels by construction. Dead until
+    // two of the characters on screen have a number, because sorting one
+    // of them against nothing is a click that appears to do nothing.
+    let numbered = rows
+        .iter()
+        .filter(|(character, _)| {
+            app::with(|state| {
+                state
+                    .settings
+                    .accounts
+                    .get(character)
+                    .and_then(|account| account.initiative)
+                    .is_some()
+            })
+        })
+        .count();
+    items.push(Item {
+        area: R::new(init_x, text.header + 8, INIT_WIDTH, 20),
+        part: Part::SortInitiative,
+        live: numbered >= 2,
     });
 
     let list_top = text.header + 36;
@@ -171,6 +208,11 @@ fn layout(lang: Lang, rows: &[(String, String)], text: Text, scroll: usize)
                 character: character.clone(),
                 breed: breed.clone(),
             },
+            live: true,
+        });
+        items.push(Item {
+            area: R::new(init_x, y + (ROW_HEIGHT - PILL_HEIGHT) / 2, INIT_WIDTH, PILL_HEIGHT),
+            part: Part::InitPill { owner: character.clone() },
             live: true,
         });
         items.push(Item {
@@ -501,7 +543,7 @@ pub fn snapshot(path: &str) -> bool {
 }
 
 pub fn hide(hwnd: HWND) {
-    app::with(|state| state.capture = Capture::Nothing);
+    end_capture();
     unsafe { ShowWindow(hwnd, SW_HIDE) };
 }
 
@@ -600,9 +642,15 @@ unsafe fn paint(hwnd: HWND) {
         DT_WORDBREAK | DT_NOPREFIX,
     );
 
-    // The column headings, each over the thing it names.
-    let key_x = WIDTH - PAD - 14 - KEY_WIDTH;
+    // The column headings, each over the thing it names. The gutter is
+    // subtracted here exactly as layout subtracts it: without it the
+    // headings stayed put while the pills slid left to make room for the
+    // scrollbar, so from the seventh account on, every heading sat a
+    // scrollbar's width to the right of its own column.
+    let gutter = if rows.len() > MAX_VISIBLE_ROWS { SCROLLBAR_GUTTER } else { 0 };
+    let key_x = WIDTH - PAD - 14 - gutter - KEY_WIDTH;
     let order_x = key_x - 20 - ORDER_WIDTH;
+    let init_x = order_x - 20 - INIT_WIDTH;
     let columns_top = text.header + 8;
     canvas.text(
         lang.column_character(),
@@ -664,7 +712,7 @@ unsafe fn paint(hwnd: HWND) {
                 // Stopped short of the first pill. The name is the game's
                 // and can be long; running it under the numbers is how a
                 // wide column quietly becomes an unreadable one.
-                let text_right = at(order_x - 12);
+                let text_right = at(init_x - 12);
                 canvas.text(
                     character,
                     R { l: area.l + at(36), t: area.t + at(10), r: text_right, b: area.t + at(32) },
@@ -717,6 +765,55 @@ unsafe fn paint(hwnd: HWND) {
                     area,
                     if capturing { fonts.small } else { fonts.pill },
                     if capturing { GOLD } else { CREAM },
+                    DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX,
+                );
+            }
+            Part::InitPill { owner } => {
+                let typing = match &capture {
+                    Capture::Initiative { owner: who, typed } if who == owner => Some(typed),
+                    _ => None,
+                };
+                let saved = app::with(|state| {
+                    state.settings.accounts.get(owner).and_then(|a| a.initiative)
+                });
+                // A caret after the digits, so a half-typed number reads as
+                // half typed rather than as a number already taken.
+                let label = match typing {
+                    Some(typed) if typed.is_empty() => lang.type_initiative().to_string(),
+                    Some(typed) => format!("{typed}_"),
+                    None => saved.map(|n| n.to_string()).unwrap_or_else(|| "-".into()),
+                };
+                let edge = if typing.is_some() { GOLD } else { line_soft() };
+                canvas.outline(area, at(8), at(1), edge,
+                               if hovered || typing.is_some() { RAISED } else { PILL });
+                let empty_hint = matches!(typing, Some(typed) if typed.is_empty());
+                canvas.text(
+                    &label,
+                    area,
+                    if empty_hint { fonts.small } else { fonts.pill },
+                    if typing.is_some() {
+                        GOLD
+                    } else if saved.is_some() {
+                        CREAM
+                    } else {
+                        DIM
+                    },
+                    DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX,
+                );
+            }
+            Part::SortInitiative => {
+                // Brighter than the headings beside it once it can actually
+                // sort - a heading that has become a button should not look
+                // like one that has not, and there is no room down here for
+                // a word explaining the difference.
+                if hovered {
+                    canvas.round(area.inset(at(-4)), at(6), PILL);
+                }
+                canvas.text(
+                    lang.column_initiative(),
+                    area,
+                    fonts.column,
+                    if !item.live { LEAF_DIM } else if hovered { CREAM } else { LEAF },
                     DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX,
                 );
             }
@@ -895,7 +992,34 @@ fn part_at(hwnd: HWND, index: usize) -> Option<Part> {
     items.get(index).map(|item| item.part.clone())
 }
 
+/// Close whatever the panel was capturing, KEEPING a half-typed
+/// initiative rather than dropping it.
+///
+/// A key bind is either pressed or it is not, so putting that capture away
+/// loses nothing. An initiative is typed a digit at a time, and a player
+/// who typed 1150 and then clicked the next row would have lost it with
+/// nothing to say so - the pill would simply still read "-", which looks
+/// exactly like never having typed it.
+fn end_capture() {
+    let pending = app::with(|state| {
+        let pending = match &state.capture {
+            Capture::Initiative { owner, typed } => Some((owner.clone(), typed.clone())),
+            _ => None,
+        };
+        state.capture = Capture::Nothing;
+        pending
+    });
+    if let Some((owner, typed)) = pending {
+        // Nothing typed, or a zero, means "forget it": an initiative of
+        // zero is not a reading anybody has.
+        app::set_initiative(&owner, typed.parse().ok().filter(|n| *n > 0));
+    }
+}
+
 fn clicked(hwnd: HWND, part: Part) {
+    // Whatever was being typed is finished first, whichever part was
+    // clicked - including this same pill being clicked again.
+    end_capture();
     match part {
         Part::Row { character, .. } => {
             app::switch_to(&character);
@@ -905,6 +1029,21 @@ fn clicked(hwnd: HWND, part: Part) {
         }
         Part::OrderPill { owner } => {
             app::with(|state| state.capture = Capture::Order(owner));
+        }
+        Part::InitPill { owner } => {
+            // Opened on the number that is already there, so a correction
+            // is a backspace rather than a retype from nothing.
+            let typed = app::with(|state| {
+                state.settings.accounts.get(&owner).and_then(|a| a.initiative)
+            })
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+            app::with(|state| state.capture = Capture::Initiative { owner, typed });
+        }
+        Part::SortInitiative => {
+            if app::order_by_initiative() {
+                app::with(|state| state.scroll = 0);
+            }
         }
         Part::NextRow => {
             app::switch_next();
@@ -987,6 +1126,33 @@ fn typed(hwnd: HWND, code: u32) {
                         app::with(|state| state.capture = Capture::Nothing);
                     }
                 }
+            }
+        }
+        Capture::Initiative { owner, mut typed } => {
+            // Four digits is every initiative the game has, and a cap means
+            // a key held down cannot grow the string without end.
+            let digit = match code as u16 {
+                0x30..=0x39 => Some(code as u16 - 0x30),
+                VK_NUMPAD0..=VK_NUMPAD9 => Some(code as u16 - VK_NUMPAD0),
+                _ => None,
+            };
+            if let Some(digit) = digit {
+                if typed.len() < 4 {
+                    typed.push(char::from(b'0' + digit as u8));
+                }
+                app::with(|state| state.capture = Capture::Initiative { owner, typed });
+            } else if code == VK_RETURN as u32 {
+                end_capture();
+            } else if code == VK_BACK as u32 {
+                typed.pop();
+                app::with(|state| state.capture = Capture::Initiative { owner, typed });
+            } else if code == VK_DELETE as u32 {
+                app::with(|state| state.capture = Capture::Nothing);
+                app::set_initiative(&owner, None);
+            } else if code == VK_ESCAPE as u32 {
+                // The one way out that keeps the saved number: Escape
+                // abandons the edit, everything else commits it.
+                app::with(|state| state.capture = Capture::Nothing);
             }
         }
     }
@@ -1118,7 +1284,7 @@ unsafe extern "system" fn wndproc(
                     clicked(hwnd, part);
                 }
             } else {
-                app::with(|state| state.capture = Capture::Nothing);
+                end_capture();
                 repaint(hwnd);
             }
             0
@@ -1151,7 +1317,7 @@ unsafe extern "system" fn wndproc(
             0
         }
         WM_KILLFOCUS => {
-            app::with(|state| state.capture = Capture::Nothing);
+            end_capture();
             repaint(hwnd);
             0
         }

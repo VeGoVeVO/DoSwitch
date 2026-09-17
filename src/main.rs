@@ -94,6 +94,11 @@ fn main() {
                 let account = state.settings.account(name);
                 account.order = Some(index as u32 + 1);
                 account.key = keys::Bind::parse(&format!("F{}", index + 1));
+                // Invented initiatives, falling as the order rises, so the
+                // picture shows the column agreeing with itself: highest
+                // initiative first. A screenshot of an empty column would
+                // teach a new buyer that the feature does nothing.
+                account.initiative = Some(1200 - index as u32 * 115);
             }
             state.settings.next = keys::Bind::parse(&format!("F{}", count + 1));
         });
