@@ -13,7 +13,15 @@
 //! beside a name is worse than no emblem, because nothing about it looks
 //! wrong.
 
-use crate::draw::{blit, Canvas, R};
+use crate::draw::{blit_lit, Canvas, R};
+
+/// The halo behind an emblem: white, and soft enough that it reads as the
+/// mark being lit rather than as an outline drawn round it. The panel is
+/// nearly black and the artwork is saturated, so a white fringe is what
+/// separates the two - a leaf-coloured one disappeared into the row's own
+/// border and a black one just muddied the edge.
+const HALO: u32 = 0x00FF_FFFF;
+const HALO_STRENGTH: f32 = 0.55;
 
 include!(concat!(env!("OUT_DIR"), "/breeds_atlas.rs"));
 const EMBLEM_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/breeds.bgra"));
@@ -31,7 +39,7 @@ pub fn draw(canvas: &Canvas, area: R, breed: &str) -> bool {
     let Some(bytes) = crate::breeds::id_for(breed).and_then(tile) else {
         return false;
     };
-    blit(canvas, area, bytes, EMBLEM_TILE, EMBLEM_TILE);
+    blit_lit(canvas, area, bytes, EMBLEM_TILE, EMBLEM_TILE, HALO, HALO_STRENGTH);
     true
 }
 

@@ -33,6 +33,9 @@ from PIL import Image
 
 API = "https://api.dofusdb.fr/breeds?$limit=50"
 TILE = 48
+# Empty tile left around the trimmed mark, so the panel's edge glow has
+# room to spread instead of being clipped flat against the tile's border.
+MARGIN = 4
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 ART = os.path.join(ROOT, "assets", "breeds")
@@ -79,11 +82,39 @@ def names_of(breed):
 
 
 def save_art(breed):
+    """Trim the transparent margin, then centre what is left in the tile.
+
+    The source art is not consistently framed: some symbols sit dead centre
+    in their square, others are pushed to a corner with a wide empty band
+    down one side. Resizing the raw square meant the panel centred the
+    TILE rather than the MARK, so a row's emblem sat visibly off to one
+    side, and a symbol with a lot of padding drew smaller than its
+    neighbours for no reason a reader could see - the two complaints are
+    one bug.
+
+    Trimming to the alpha bounding box and fitting THAT to the tile fixes
+    both at once, and doing it on the full-size source rather than on the
+    downscaled copy means nothing is enlarged from pixels already thrown
+    away. MARGIN keeps a ring of empty tile around the mark so the glow
+    the panel draws round its edge has somewhere to go.
+    """
     url = breed["img"]
     raw = os.path.join(ART, f"_{breed['id']}.src")
     urllib.request.urlretrieve(url, raw)
-    image = Image.open(raw).convert("RGBA").resize((TILE, TILE), Image.LANCZOS)
-    image.save(os.path.join(ART, f"{breed['id']}.png"))
+    source = Image.open(raw).convert("RGBA")
+
+    box = source.split()[3].getbbox()
+    if box:
+        source = source.crop(box)
+
+    inner = TILE - MARGIN * 2
+    fit = min(inner / source.width, inner / source.height)
+    size = (max(1, round(source.width * fit)), max(1, round(source.height * fit)))
+    mark = source.resize(size, Image.LANCZOS)
+
+    tile = Image.new("RGBA", (TILE, TILE), (0, 0, 0, 0))
+    tile.paste(mark, ((TILE - size[0]) // 2, (TILE - size[1]) // 2), mark)
+    tile.save(os.path.join(ART, f"{breed['id']}.png"))
     os.remove(raw)
 
 

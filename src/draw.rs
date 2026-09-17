@@ -339,6 +339,108 @@ impl Logo {
 /// without un-premultiplying first, and compositing is the plain
 /// `source + destination * (1 - alpha)`.
 pub fn blit(canvas: &Canvas, area: R, bytes: &[u8], source_width: i32, source_height: i32) {
+    blit_lit(canvas, area, bytes, source_width, source_height, 0, 0.0);
+}
+
+/// One source pixel of the scaled-down image: premultiplied B, G, R, A.
+type Cell = [u8; 4];
+
+/// The source averaged down to exactly `width` x `height`.
+///
+/// Sampling into a buffer first, rather than compositing straight onto the
+/// canvas, is what lets the halo be drawn from the SAME pixels the mark is
+/// drawn from: the glow traces the shape that actually lands on screen, not
+/// the full-size one it was scaled from.
+fn sample(bytes: &[u8], source_width: i32, source_height: i32, width: i32, height: i32) -> Vec<Cell> {
+    let mut cells = vec![[0u8; 4]; (width * height) as usize];
+    for dy in 0..height {
+        // The half-open band of source rows this destination row covers.
+        let sy0 = (dy * source_height / height).clamp(0, source_height - 1);
+        let sy1 = (((dy + 1) * source_height + height - 1) / height).clamp(sy0 + 1, source_height);
+        for dx in 0..width {
+            let sx0 = (dx * source_width / width).clamp(0, source_width - 1);
+            let sx1 = (((dx + 1) * source_width + width - 1) / width).clamp(sx0 + 1, source_width);
+            let (mut b, mut g, mut r, mut a, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
+            for sy in sy0..sy1 {
+                for sx in sx0..sx1 {
+                    let index = ((sy * source_width + sx) * 4) as usize;
+                    b += bytes[index] as u32;
+                    g += bytes[index + 1] as u32;
+                    r += bytes[index + 2] as u32;
+                    a += bytes[index + 3] as u32;
+                    n += 1;
+                }
+            }
+            if n == 0 {
+                continue;
+            }
+            cells[(dy * width + dx) as usize] =
+                [(b / n) as u8, (g / n) as u8, (r / n) as u8, (a / n) as u8];
+        }
+    }
+    cells
+}
+
+/// A separable moving-average pass over one channel. Run twice it is close
+/// enough to a gaussian for a halo, and it costs a few thousand adds on a
+/// field this small rather than a kernel multiply per pixel.
+fn blur(field: &[u16], width: i32, height: i32, radius: i32) -> Vec<u16> {
+    let span = (radius * 2 + 1) as u32;
+    let mut across = vec![0u16; field.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let mut total = 0u32;
+            for k in -radius..=radius {
+                let sx = (x + k).clamp(0, width - 1);
+                total += field[(y * width + sx) as usize] as u32;
+            }
+            across[(y * width + x) as usize] = (total / span) as u16;
+        }
+    }
+    let mut down = vec![0u16; field.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let mut total = 0u32;
+            for k in -radius..=radius {
+                let sy = (y + k).clamp(0, height - 1);
+                total += across[(sy * width + x) as usize] as u32;
+            }
+            down[(y * width + x) as usize] = (total / span) as u16;
+        }
+    }
+    down
+}
+
+/// Premultiplied BGRA drawn into a box, scaled to fit, centred, never
+/// cropped - with an optional soft halo traced round its edges first.
+///
+/// The scaling is done here, by averaging the source pixels that fall
+/// under each destination pixel, rather than by handing the job to
+/// AlphaBlend. AlphaBlend ignores SetStretchBltMode - HALFTONE was
+/// being set above this call and doing nothing - and point-samples
+/// instead, so shrinking a 151x140 mark into a thirty pixel box threw
+/// away nineteen pixels in twenty and kept whichever one it landed on.
+/// That is what made the logo look chewed at every size in the app, and
+/// it is exactly what a 48px emblem in a 24px slot would do again.
+///
+/// The source is premultiplied BGRA (build.rs premultiplies it for
+/// exactly this kind of blending), so a box average of it is valid
+/// without un-premultiplying first, and compositing is the plain
+/// `source + destination * (1 - alpha)`.
+///
+/// The halo is the mark's own alpha, spread and blurred, painted in
+/// `glow` UNDER the mark - so only the fringe that escapes past the edges
+/// is ever seen. Drawing it under rather than over is what keeps a white
+/// glow from washing the artwork out into a pale blob.
+pub fn blit_lit(
+    canvas: &Canvas,
+    area: R,
+    bytes: &[u8],
+    source_width: i32,
+    source_height: i32,
+    glow: u32,
+    strength: f32,
+) {
     if source_width <= 0 || source_height <= 0 {
         return;
     }
@@ -351,49 +453,75 @@ pub fn blit(canvas: &Canvas, area: R, bytes: &[u8], source_width: i32, source_he
     }
     let x0 = area.l + (area.width() - width) / 2;
     let y0 = area.t + (area.height() - height) / 2;
+    let cells = sample(bytes, source_width, source_height, width, height);
+
+    if strength > 0.0 {
+        // Two layers: a tight rim that reads as the mark being lit, and a
+        // wider, fainter bloom under it that stops the rim looking like a
+        // sticker cut out and pasted on. Both radii are scaled off the mark
+        // rather than fixed, so the halo is the same thickness relative to
+        // the emblem on a 4K panel as on a 1080p one.
+        let size = width.min(height) as f32;
+        for (fraction, share) in [(0.09_f32, 1.0_f32), (0.26, 0.42)] {
+            let radius = ((size * fraction).round() as i32).clamp(1, 7);
+            let (pad_w, pad_h) = (width + radius * 2, height + radius * 2);
+            let mut field = vec![0u16; (pad_w * pad_h) as usize];
+            for y in 0..height {
+                for x in 0..width {
+                    field[((y + radius) * pad_w + x + radius) as usize] =
+                        cells[(y * width + x) as usize][3] as u16;
+                }
+            }
+            let spread = blur(&blur(&field, pad_w, pad_h, radius), pad_w, pad_h, radius);
+            let pixels = canvas.slice();
+            for y in 0..pad_h {
+                let ty = y0 - radius + y;
+                if ty < 0 || ty >= canvas.height {
+                    continue;
+                }
+                for x in 0..pad_w {
+                    let tx = x0 - radius + x;
+                    if tx < 0 || tx >= canvas.width {
+                        continue;
+                    }
+                    let at = (y * pad_w + x) as usize;
+                    // The spread MINUS the silhouette it came from. Without
+                    // this the halo spends most of its strength under the
+                    // mark, where the mark covers it, and what escapes past
+                    // the edge is too faint to read as light - it just greys
+                    // the outline. Taking the difference puts every bit of
+                    // it outside the shape.
+                    let outside = spread[at].saturating_sub(field[at]);
+                    if outside == 0 {
+                        continue;
+                    }
+                    // The difference peaks well below full alpha, so it is
+                    // lifted before it is used; without the gain a "glow"
+                    // at any sane strength is a smudge.
+                    let coverage = (outside as f32 / 255.0 * 2.6 * strength * share).clamp(0.0, 1.0);
+                    let index = (ty * canvas.width + tx) as usize;
+                    pixels[index] = mix(pixels[index], glow, coverage);
+                }
+            }
+        }
+    }
+
     let pixels = canvas.slice();
-    let source = |sx: i32, sy: i32| -> (u32, u32, u32, u32) {
-        let index = ((sy * source_width + sx) * 4) as usize;
-        (
-            bytes[index] as u32,
-            bytes[index + 1] as u32,
-            bytes[index + 2] as u32,
-            bytes[index + 3] as u32,
-        )
-    };
     for dy in 0..height {
         let ty = y0 + dy;
         if ty < 0 || ty >= canvas.height {
             continue;
         }
-        // The half-open band of source rows this destination row covers.
-        let sy0 = (dy * source_height / height).clamp(0, source_height - 1);
-        let sy1 = (((dy + 1) * source_height + height - 1) / height).clamp(sy0 + 1, source_height);
         for dx in 0..width {
             let tx = x0 + dx;
             if tx < 0 || tx >= canvas.width {
                 continue;
             }
-            let sx0 = (dx * source_width / width).clamp(0, source_width - 1);
-            let sx1 = (((dx + 1) * source_width + width - 1) / width).clamp(sx0 + 1, source_width);
-            let (mut b, mut g, mut r, mut a, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
-            for sy in sy0..sy1 {
-                for sx in sx0..sx1 {
-                    let (sb, sg, sr, sa) = source(sx, sy);
-                    b += sb;
-                    g += sg;
-                    r += sr;
-                    a += sa;
-                    n += 1;
-                }
-            }
-            if n == 0 {
-                continue;
-            }
-            let (b, g, r, a) = (b / n, g / n, r / n, a / n);
+            let [b, g, r, a] = cells[(dy * width + dx) as usize];
             if a == 0 {
                 continue;
             }
+            let (b, g, r, a) = (b as u32, g as u32, r as u32, a as u32);
             let index = (ty * canvas.width + tx) as usize;
             let under = pixels[index];
             let keep = 255 - a;
