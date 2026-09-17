@@ -31,6 +31,11 @@ pub struct Settings {
     pub next: Option<Bind>,
     pub accounts: BTreeMap<String, Account>,
     pub startup: bool,
+    /// Whether the app stages and applies its own updates. On by default;
+    /// the panel's header toggle turns it off. A forced floor from the
+    /// server (see update.rs) overrides this, so a major fix still reaches
+    /// everyone.
+    pub auto_update: bool,
 }
 
 impl Settings {
@@ -43,6 +48,7 @@ impl Settings {
             next: None,
             accounts: BTreeMap::new(),
             startup: false,
+            auto_update: true,
         }
     }
 
@@ -101,6 +107,9 @@ pub fn load(fallback: Lang) -> Settings {
     );
     settings.next = value["next"].as_str().and_then(Bind::parse);
     settings.startup = value["startup"].as_bool().unwrap_or(false);
+    // Absent means on: an install from before this setting existed, and the
+    // default for a fresh one, both update themselves until told not to.
+    settings.auto_update = value["auto_update"].as_bool().unwrap_or(true);
     if let Some(table) = value["accounts"].as_object() {
         for (name, entry) in table {
             settings.accounts.insert(
@@ -113,6 +122,21 @@ pub fn load(fallback: Lang) -> Settings {
         }
     }
     settings
+}
+
+/// Just the auto-update flag, read straight from the file. update.rs needs
+/// it on its own thread and before app::start (the startup-apply runs first
+/// of all), where the loaded Settings are not in reach. Absent or unreadable
+/// means on, matching load().
+pub fn auto_update_from_disk() -> bool {
+    let Some(path) = file() else { return true };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return true;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return true;
+    };
+    value["auto_update"].as_bool().unwrap_or(true)
 }
 
 pub fn save(settings: &Settings) {
@@ -139,6 +163,7 @@ pub fn save(settings: &Settings) {
         "language": settings.lang.code(),
         "next": settings.next.map(|b| b.name()),
         "startup": settings.startup,
+        "auto_update": settings.auto_update,
         "accounts": Value::Object(accounts),
     });
     let Ok(text) = serde_json::to_string_pretty(&body) else { return };

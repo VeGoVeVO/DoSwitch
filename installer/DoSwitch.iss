@@ -43,6 +43,16 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "fr"; MessagesFile: "compiler:Languages\French.isl"
 Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
 
+[Registry]
+; The language the player picked, for the app to read at startup: the in-app
+; switcher was replaced by the auto-update toggle, so language is chosen here
+; now. {language} is the selected [Languages] Name (en/fr/es), which matches
+; the app's Lang codes exactly. On a /VERYSILENT self-update Inno reuses the
+; previously selected language, so this preserves it rather than resetting.
+; Left in place on uninstall (no uninsdeletevalue): the Pro app shares this
+; key, and settings.json keeps the language regardless.
+Root: HKCU; Subkey: "Software\DoSwitch"; ValueType: string; ValueName: "Language"; ValueData: "{language}"
+
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "startup"; Description: "Start DoSwitch when Windows starts"; GroupDescription: "Startup:"; Flags: unchecked

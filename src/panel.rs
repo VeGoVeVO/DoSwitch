@@ -59,7 +59,9 @@ pub enum Part {
     OrderPill { owner: String },
     Refresh,
     Done,
-    Language,
+    /// The header toggle for self-updates, where the language switcher used
+    /// to be (the language is chosen in the installer now).
+    AutoUpdate,
 }
 
 pub struct Item {
@@ -145,8 +147,8 @@ fn layout(lang: Lang, rows: &[(String, String)], text: Text, scroll: usize)
     let order_x = key_x - 20 - ORDER_WIDTH;
 
     items.push(Item {
-        area: R::new(WIDTH - PAD - 102, 24, 102, 28),
-        part: Part::Language,
+        area: R::new(WIDTH - PAD - 118, 24, 118, 28),
+        part: Part::AutoUpdate,
         live: true,
     });
 
@@ -719,22 +721,31 @@ unsafe fn paint(hwnd: HWND) {
                     DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX,
                 );
             }
-            Part::Language => {
-                // Three segments, the live one in leaf. Clicking anywhere
-                // on it moves to the next language round the ring, which
-                // is one target instead of three and reads the same.
+            Part::AutoUpdate => {
+                // A short label and a little sliding switch: on (leaf, knob
+                // right) or off (dim, knob left). The whole pill is one
+                // target and lights on hover, like Refresh beside it.
+                let on = app::with(|state| state.settings.auto_update);
                 canvas.outline(area, at(8), at(1), line_soft(), if hovered { RAISED } else { PILL });
-                let third = area.width() / 3;
-                for (index, one) in Lang::ALL.iter().enumerate() {
-                    let slot = R {
-                        l: area.l + third * index as i32,
-                        r: area.l + third * (index as i32 + 1),
-                        ..area
-                    };
-                    canvas.text(one.label(), slot, fonts.column,
-                                if lang == *one { LEAF } else { DIM },
-                                DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
-                }
+                let tw = at(30);
+                let th = at(16);
+                let track = R::new(area.r - tw - at(8), area.t + (area.height() - th) / 2, tw, th);
+                let label = R { r: track.l - at(8), ..area };
+                canvas.text(
+                    lang.auto_update_label(),
+                    label,
+                    fonts.column,
+                    if on { CREAM } else { MUTED },
+                    DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX,
+                );
+                canvas.round(track, th / 2, if on { mix(PILL, LEAF, 0.55) } else { PILL });
+                let knob = th - at(4);
+                let knob_x = if on { track.r - knob - at(2) } else { track.l + at(2) };
+                canvas.round(
+                    R::new(knob_x, track.t + at(2), knob, knob),
+                    knob / 2,
+                    if on { LEAF } else { DIM },
+                );
             }
             Part::Refresh | Part::Done => {
                 let done = item.part == Part::Done;
@@ -884,15 +895,12 @@ fn clicked(hwnd: HWND, part: Part) {
             return;
         }
         Part::Done => hide(hwnd),
-        Part::Language => {
-            app::with(|state| {
-                state.settings.lang = state.settings.lang.other();
-            });
+        Part::AutoUpdate => {
+            // Flip and persist. The size does not change, so a repaint (below)
+            // is enough - no resize. update.rs reads the flag from disk on the
+            // next launch, which is when a staged update would apply anyway.
+            app::with(|state| state.settings.auto_update = !state.settings.auto_update);
             app::save();
-            // The subtitle and note are longer in some languages, so the
-            // window's height changes with the language.
-            resize(hwnd);
-            return;
         }
     }
     repaint(hwnd);

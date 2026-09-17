@@ -29,15 +29,17 @@ const API: &str = match option_env!("DOSWITCH_API") {
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const DETACHED_PROCESS: u32 = 0x0000_0008;
 
-pub fn check_in_background() {
-    std::thread::spawn(|| {
-        if let Err(reason) = try_stage() {
+/// `auto_update` is the player's toggle; a forced floor from the server
+/// overrides it inside try_stage, so a major fix still reaches everyone.
+pub fn check_in_background(auto_update: bool) {
+    std::thread::spawn(move || {
+        if let Err(reason) = try_stage(auto_update) {
             log(&format!("stage check: {reason}"));
         }
     });
 }
 
-fn try_stage() -> Result<(), String> {
+fn try_stage(auto_update: bool) -> Result<(), String> {
     let response = http::get(&format!("{API}/api/v1/version?product=free"))?;
     if response.status != 200 {
         return Err(format!("version endpoint answered {}", response.status));
@@ -45,6 +47,17 @@ fn try_stage() -> Result<(), String> {
     let json = String::from_utf8_lossy(&response.body);
     let latest = field(&json, "version").ok_or("no version in the reply")?;
     let current = env!("DOSWITCH_VERSION");
+    // The forced floor, if the admin set one: the version an app must reach
+    // even with auto-update off. "Forced" means the running build is BELOW it.
+    let forced = field(&json, "min_version").is_some_and(|min| is_newer(&min, current));
+    if !auto_update && !forced {
+        // The player turned updates off and nothing is being forced. Make
+        // sure a staged update from an earlier "on" session is not waiting,
+        // then leave the build exactly as it is.
+        clear_staged();
+        log(&format!("stage check: auto-update off, {current} kept (latest {latest})"));
+        return Ok(());
+    }
     if !is_newer(&latest, current) {
         // Up to date. Sweep away a staged installer left from an update that
         // has since been applied, so it is never run twice.
@@ -75,7 +88,11 @@ fn try_stage() -> Result<(), String> {
     let path = staged_path().ok_or("no staging path")?;
     std::fs::write(&path, &file.body).map_err(|e| format!("could not stage the installer: {e}"))?;
     set_staged_version(&latest);
-    log(&format!("stage check: staged {latest}, will apply on quit"));
+    // Remember whether this was forced, so apply_staged can respect the
+    // toggle: a forced update still applies with auto-update off, a normal
+    // one does not.
+    set_staged_forced(forced);
+    log(&format!("stage check: staged {latest}{}, will apply on quit", if forced { " (forced)" } else { "" }));
     Ok(())
 }
 
@@ -94,12 +111,19 @@ fn try_stage() -> Result<(), String> {
 /// staged version and the running build is STILL older, the install did not
 /// take, so it is not tried again. Even if the relaunch never happens the exe
 /// is replaced, so the next manual launch is simply the new version.
-pub fn apply_staged_on_startup() -> bool {
+pub fn apply_staged_on_startup(auto_update: bool) -> bool {
     let Some(version) = staged_version() else { return false };
     let current = env!("DOSWITCH_VERSION");
     if !is_newer(&version, current) {
         clear_staged();
         clear_attempt();
+        return false;
+    }
+    // Respect the toggle at apply time too: a staged update applies only if
+    // auto-update is on, or it was staged because the server forced it. The
+    // held file is swept by try_stage this same session.
+    if !auto_update && !staged_forced() {
+        log(&format!("staged {version} held: auto-update off and not forced"));
         return false;
     }
     if attempt_version().as_deref() == Some(version.as_str()) {
@@ -186,6 +210,29 @@ fn clear_staged() {
         let _ = std::fs::remove_file(path);
     }
     if let Some(marker) = staged_marker() {
+        let _ = std::fs::remove_file(marker);
+    }
+    if let Some(marker) = staged_forced_marker() {
+        let _ = std::fs::remove_file(marker);
+    }
+}
+
+/// Whether the staged update was staged because the server forced it, rather
+/// than a normal newer release. Lets apply_staged land a forced update even
+/// when the player has auto-update off.
+fn staged_forced_marker() -> Option<std::path::PathBuf> {
+    Some(state_dir()?.join("staged-free-forced"))
+}
+
+fn staged_forced() -> bool {
+    staged_forced_marker().is_some_and(|p| p.exists())
+}
+
+fn set_staged_forced(forced: bool) {
+    let Some(marker) = staged_forced_marker() else { return };
+    if forced {
+        let _ = std::fs::write(marker, "1");
+    } else {
         let _ = std::fs::remove_file(marker);
     }
 }

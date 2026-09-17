@@ -23,33 +23,12 @@ impl Lang {
         }
     }
 
-    /// Every language, in the order the toggle walks them.
-    pub const ALL: [Lang; 3] = [Lang::En, Lang::Fr, Lang::Es];
-
-    /// What the toggle shows for this language.
-    pub fn label(self) -> &'static str {
-        match self {
-            Lang::En => "EN",
-            Lang::Fr => "FR",
-            Lang::Es => "ES",
-        }
-    }
-
     pub fn from_code(code: &str) -> Option<Lang> {
         match code {
             "en" => Some(Lang::En),
             "fr" => Some(Lang::Fr),
             "es" => Some(Lang::Es),
             _ => None,
-        }
-    }
-
-    /// The next language round the ring, which is what the toggle does.
-    pub fn other(self) -> Lang {
-        match self {
-            Lang::En => Lang::Fr,
-            Lang::Fr => Lang::Es,
-            Lang::Es => Lang::En,
         }
     }
 
@@ -124,6 +103,12 @@ impl Lang {
 
     pub fn done(self) -> &'static str {
         self.pick("Minimize", "Réduire", "Minimizar")
+    }
+
+    /// The header's auto-update toggle. Short on purpose - it sits where the
+    /// language switcher used to, and the language is an install choice now.
+    pub fn auto_update_label(self) -> &'static str {
+        self.pick("Auto-update", "M\u{e0}j auto", "Auto-act.")
     }
 
     pub fn nothing_open(self) -> &'static str {

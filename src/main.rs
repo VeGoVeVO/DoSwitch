@@ -44,6 +44,12 @@ const MENU_QUIT: usize = 3;
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "DoSwitch";
 
+// Where the installer records the language the player chose (installer.iss
+// [Registry]). It is the app's language now that the in-app switcher is
+// gone; read once at startup as the fallback for store::load.
+const LANG_KEY: &str = r"Software\DoSwitch";
+const LANG_VALUE: &str = "Language";
+
 fn main() {
     // The accounts panel's own snapshot, for the README screenshots rather
     // than a golden check. It renders the panel filled with INVENTED accounts
@@ -99,7 +105,7 @@ fn main() {
     // a clean exit, so however the last session ended the new build lands on
     // the next launch. If it launches the installer, this throwaway instance
     // must get out of the way at once so the exe can be replaced.
-    if update::apply_staged_on_startup() {
+    if update::apply_staged_on_startup(store::auto_update_from_disk()) {
         return;
     }
 
@@ -139,7 +145,12 @@ fn main() {
             windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
         );
 
-        let settings = store::load(i18n::system_language());
+        // The language is the install-time choice now (the panel's switcher
+        // was replaced by the auto-update toggle), read from the registry the
+        // installer wrote; a build run without an installer (dev, portable)
+        // falls back to the system language.
+        let settings = store::load(install_language());
+        let auto_update = settings.auto_update;
         app::start(settings);
 
         let tray = create_tray_window();
@@ -147,9 +158,10 @@ fn main() {
             return;
         }
         add_tray_icon(tray);
-        // Update to a newer free build in the background, verified before
-        // it is ever run. Never blocks startup.
-        update::check_in_background();
+        // Update to a newer free build in the background, verified before it is
+        // ever run - unless the player turned auto-update off, in which case
+        // only a server-forced floor still applies. Never blocks startup.
+        update::check_in_background(auto_update);
         let panel = panel::create();
         app::with(|state| state.panel = panel);
 
@@ -240,6 +252,34 @@ unsafe fn refresh_tray_tip(hwnd: HWND) {
 }
 
 /// Whether Windows is set to start this program at login.
+/// The language the installer recorded, or the system language when there is
+/// none - a build run without the installer (dev, a portable copy) has no
+/// registry value to read, so it still comes up in something sensible.
+fn install_language() -> i18n::Lang {
+    unsafe {
+        let mut buf = [0u16; 16];
+        let mut size = (buf.len() * 2) as u32;
+        let status = RegGetValueW(
+            HKEY_CURRENT_USER,
+            wide(LANG_KEY).as_ptr(),
+            wide(LANG_VALUE).as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr() as *mut core::ffi::c_void,
+            &mut size,
+        );
+        if status == 0 {
+            // size is the byte count including the trailing NUL.
+            let chars = (size as usize / 2).saturating_sub(1).min(buf.len());
+            let code = String::from_utf16_lossy(&buf[..chars]);
+            if let Some(lang) = i18n::Lang::from_code(code.trim()) {
+                return lang;
+            }
+        }
+    }
+    i18n::system_language()
+}
+
 fn starts_with_windows() -> bool {
     unsafe {
         let mut size = 0u32;
