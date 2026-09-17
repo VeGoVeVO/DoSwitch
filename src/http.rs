@@ -118,7 +118,14 @@ fn request(method: &str, url: &str, body: Option<&str>) -> Result<Response, Stri
 X-DoSwitch-Version: {}
 X-DoSwitch-Nonce: {}
 ",
-            env!("CARGO_PKG_VERSION"),
+            // DOSWITCH_VERSION, not CARGO_PKG_VERSION. The crate version is
+            // the same string for every build in a release line, so this
+            // header - the one thing that ties an event in the server log
+            // to a client build - said "1.0.0" for build 1 and for build
+            // 46 alike, and the admin's Version column sat on it and never
+            // moved. A version that cannot change is worse than no version:
+            // it reads as a customer who never updates.
+            env!("DOSWITCH_VERSION"),
             nonce(),
         ));
         let (body_ptr, body_len) = match body {
