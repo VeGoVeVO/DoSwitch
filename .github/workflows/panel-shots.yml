@@ -1,0 +1,63 @@
+name: Panel screenshots
+
+# Re-render the README screenshots (docs/panel-*.png) whenever the panel's
+# look could have changed, so a change to how the accounts panel is drawn
+# reaches the README on its own instead of being screenshotted by hand -
+# which is how the author's real characters ended up on a public page.
+#
+# Runs on Windows because the panel is drawn with GDI and captured with
+# PrintWindow, which need a real desktop session. The snapshot uses invented
+# accounts (DOSWITCH_FAKE), so nothing real is ever drawn.
+#
+# The images live in THIS repo, so the commit uses the default GITHUB_TOKEN
+# (contents: write) - no deploy key. A push made with that token does not
+# start another workflow run, so this cannot loop; and publish-free only
+# watches src/installer/assets, so a docs commit never republishes the app.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/panel.rs"
+      - "src/draw.rs"
+      - "src/theme.rs"
+      - "src/i18n.rs"
+      - "tools/panel_shots.py"
+      - ".github/workflows/panel-shots.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: panel-shots
+  cancel-in-progress: true
+
+jobs:
+  render:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the app
+        run: cargo build --release
+
+      - name: Render the three panels into docs/
+        run: python tools/panel_shots.py
+
+      - name: Commit and push only if the panels actually changed
+        shell: bash
+        run: |
+          git config user.name "VeGoVeVO"
+          git config user.email "VeGoVeVO@users.noreply.github.com"
+          if [ -n "$(git status --porcelain docs)" ]; then
+            git add docs/panel-en.png docs/panel-fr.png docs/panel-es.png
+            git commit -m "Re-render README panel screenshots"
+            git push
+            echo "panels updated and pushed"
+          else
+            echo "panels unchanged - nothing to push"
+          fi
