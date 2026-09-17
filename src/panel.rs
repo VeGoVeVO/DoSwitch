@@ -491,13 +491,6 @@ pub fn snapshot(path: &str) -> bool {
         // rows nobody ever wrote - which come out pure black, because that is
         // what a fresh DIB section holds.
         //
-        // And repaint synchronously first. The pump above lets a queued paint
-        // land, but a resize that arrives late leaves the window at its new
-        // size with the old, shorter picture still on it, and PrintWindow
-        // copies that: the window is right, the paint is stale, and the strip
-        // between them is black.
-        RedrawWindow(hwnd, std::ptr::null(), std::ptr::null_mut(), RDW_INVALIDATE | RDW_UPDATENOW);
-
         let mut rc: RECT = std::mem::zeroed();
         GetClientRect(hwnd, &mut rc);
         let width = rc.right - rc.left;
@@ -523,7 +516,20 @@ pub fn snapshot(path: &str) -> bool {
             return false;
         }
         let old = SelectObject(memory, bitmap as HGDIOBJ);
-        PrintWindow(hwnd, memory, 2);
+        // Ask the window to draw itself into our bitmap, rather than copying
+        // it off the desktop. PrintWindow can only hand back pixels the
+        // desktop actually holds, so a window TALLER THAN THE SCREEN loses
+        // the part hanging off the bottom - it comes back as the black a
+        // fresh DIB section starts as. That is not a theory: GitHub's Windows
+        // runners are 1024x768, this panel is 788 tall, and the screenshots
+        // it shipped to the site had exactly twenty black rows along their
+        // bottom edge. The free panel is 690 tall, fit, and looked perfect,
+        // which is why only one of the two repos was ever wrong.
+        //
+        // WM_PRINTCLIENT runs the panel's own painter straight into this DC.
+        // It has no idea where the window is, whether anything covers it, or
+        // how big the screen is.
+        SendMessageW(hwnd, WM_PRINTCLIENT, memory as WPARAM, PRF_CLIENT as LPARAM);
 
         let size = (width * height * 4) as usize;
         let pixels = std::slice::from_raw_parts(bits as *const u8, size);
@@ -606,6 +612,20 @@ fn pill_label(owner: &str, lang: Lang, capturing: bool) -> (String, u32) {
 unsafe fn paint(hwnd: HWND) {
     let mut paint_struct: PAINTSTRUCT = std::mem::zeroed();
     let dc = BeginPaint(hwnd, &mut paint_struct);
+    paint_to(hwnd, dc);
+    EndPaint(hwnd, &paint_struct);
+}
+
+/// Draw the whole panel into ANY device context.
+///
+/// Split out of paint so a snapshot can ask for the picture directly
+/// (WM_PRINTCLIENT) instead of photographing the screen. PrintWindow can
+/// only copy what the desktop holds, and a window taller than the desktop
+/// has no pixels for the part hanging off it: on a 1024x768 CI runner the
+/// 788px Pro panel came back with its bottom twenty rows pure black, while
+/// the shorter free panel fit and looked perfect. That is the whole reason
+/// one repo's screenshots were fine and the other's had a black band.
+unsafe fn paint_to(hwnd: HWND, dc: HDC) {
     let scale = scale_of(hwnd);
     let lang = app::language();
     let rows = rows_now();
@@ -628,7 +648,6 @@ unsafe fn paint(hwnd: HWND) {
     let height = (rc.bottom - rc.top).max(1);
 
     let Some(canvas) = Canvas::new(dc, width, height) else {
-        EndPaint(hwnd, &paint_struct);
         return;
     };
     let fonts = Fonts::new(scale);
@@ -971,7 +990,6 @@ unsafe fn paint(hwnd: HWND) {
     );
 
     canvas.blit_to(dc, 0, 0);
-    EndPaint(hwnd, &paint_struct);
 }
 
 /// The scrollbar for the panel as it is right now, or None when the list
@@ -1206,6 +1224,14 @@ unsafe extern "system" fn wndproc(
             0
         }
         WM_ERASEBKGND => 1, // the whole surface is painted every time
+        // The same painter, into a caller's DC. This is how the marketing
+        // snapshot is taken, so the picture it ships is drawn by the code
+        // the player sees rather than scraped off a desktop that may not
+        // even be tall enough to hold the window.
+        WM_PRINTCLIENT => {
+            paint_to(hwnd, wparam as HDC);
+            0
+        }
         WM_MOUSEWHEEL => {
             // One notch, one row. The list is the only thing that scrolls,
             // and it scrolls in whole rows so nothing is ever half shown.
