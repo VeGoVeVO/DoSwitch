@@ -44,9 +44,18 @@ const PILL_HEIGHT: i32 = 34;
 const KEY_WIDTH: i32 = 160;
 const ORDER_WIDTH: i32 = 90;
 const INIT_WIDTH: i32 = 92;
-/// The class emblem at the front of a row, in the place the status dot
-/// used to have to itself.
-const EMBLEM: i32 = 24;
+/// The rounded tile at the head of every row. A 24px emblem hung on its
+/// own beside two lines of text had nothing to sit on: it floated in the
+/// gap between the name and the breed and read as something dropped on
+/// the row rather than part of it. A badge gives it a surface, squares it
+/// up against the two text lines, and - because the Next-account and
+/// auto-switch rows get the same badge with their status dot inside it -
+/// puts every row's text on one left rail instead of two.
+const BADGE: i32 = 40;
+/// The emblem's inset inside that badge.
+const BADGE_PAD: i32 = 7;
+/// Where a row's text starts: past the badge, plus a gap.
+const ROW_TEXT: i32 = 11 + BADGE + 12;
 // The list shows at most this many accounts and scrolls the rest, so
 // the window is a fixed, sensible size whether a player runs two
 // clients or twenty. Six is what fits without the panel feeling tall.
@@ -272,6 +281,13 @@ fn layout(lang: Lang, rows: &[(String, String)], text: Text, scroll: usize)
 /// The furthest the list can be scrolled, in whole rows.
 fn max_scroll(row_count: usize) -> usize {
     row_count.saturating_sub(MAX_VISIBLE_ROWS)
+}
+
+/// The badge rectangle at the head of a row, in device pixels.
+fn badge_of(area: R, scale: f32) -> R {
+    let at = |value: i32| (value as f32 * scale).round() as i32;
+    let size = at(BADGE);
+    R::new(area.l + at(11), area.t + (area.height() - size) / 2, size, size)
 }
 
 fn scale_of(hwnd: HWND) -> f32 {
@@ -748,20 +764,19 @@ unsafe fn paint_to(hwnd: HWND, dc: HDC) {
             Part::Row { character, breed } => {
                 canvas.outline(area, at(10), at(1), line_live(),
                                if hovered { RAISED } else { SURFACE });
-                // The class emblem where the status dot was, centred on the
-                // same point so the name does not move. A breed the table
-                // does not know gets the dot back rather than a stand-in
-                // emblem: a wrong class beside a name would look like a
-                // reading, and there is nothing about it that looks wrong.
-                let middle = area.t + area.height() / 2;
-                let slot = R::new(
-                    area.l + at(20) - at(EMBLEM) / 2,
-                    middle - at(EMBLEM) / 2,
-                    at(EMBLEM),
-                    at(EMBLEM),
-                );
-                if !crate::emblem::draw(&canvas, slot, breed) {
-                    canvas.lit_dot(area.l + at(20), middle, at(4), LEAF);
+                // The badge, then the class emblem sitting in it. A breed
+                // the table does not know gets the plain dot back, in the
+                // same badge: a wrong emblem beside a name would look like
+                // a reading, and there is nothing about it that looks wrong.
+                let badge = badge_of(area, scale);
+                canvas.outline(badge, at(12), at(1), line_soft(), PILL);
+                if !crate::emblem::draw(&canvas, badge.inset(at(BADGE_PAD)), breed) {
+                    canvas.lit_dot(
+                        badge.l + badge.width() / 2,
+                        badge.t + badge.height() / 2,
+                        at(6),
+                        LEAF,
+                    );
                 }
                 // Stopped short of the first pill. The name is the game's
                 // and can be long; running it under the numbers is how a
@@ -769,14 +784,14 @@ unsafe fn paint_to(hwnd: HWND, dc: HDC) {
                 let text_right = at(init_x - 12);
                 canvas.text(
                     character,
-                    R { l: area.l + at(36), t: area.t + at(10), r: text_right, b: area.t + at(32) },
+                    R { l: area.l + at(ROW_TEXT), t: area.t + at(10), r: text_right, b: area.t + at(32) },
                     fonts.name,
                     CREAM,
                     DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
                 );
                 canvas.text(
                     breed,
-                    R { l: area.l + at(36), t: area.t + at(32), r: text_right, b: area.b - at(8) },
+                    R { l: area.l + at(ROW_TEXT), t: area.t + at(32), r: text_right, b: area.b - at(8) },
                     fonts.small,
                     MUTED,
                     DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
@@ -785,17 +800,22 @@ unsafe fn paint_to(hwnd: HWND, dc: HDC) {
             Part::NextRow => {
                 canvas.outline(area, at(10), at(1), line_gold(),
                                if hovered { RAISED } else { SURFACE });
-                canvas.lit_dot(area.l + at(20), area.t + area.height() / 2, at(4), GOLD);
+                // The same badge the account rows wear, with the gold dot
+                // inside it - so the whole list reads down one left rail
+                // and every row's text starts at the same x.
+                let badge = badge_of(area, scale);
+                canvas.outline(badge, at(12), at(1), mix(SURFACE, GOLD, 0.30), PILL);
+                canvas.lit_dot(badge.l + badge.width() / 2, badge.t + badge.height() / 2, at(6), GOLD);
                 canvas.text(
                     lang.next_account(),
-                    R { l: area.l + at(36), t: area.t + at(10), r: area.r, b: area.t + at(32) },
+                    R { l: area.l + at(ROW_TEXT), t: area.t + at(10), r: area.r, b: area.t + at(32) },
                     fonts.name,
                     GOLD,
                     DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
                 );
                 canvas.text(
                     lang.next_account_hint(),
-                    R { l: area.l + at(36), t: area.t + at(32), r: area.r, b: area.b - at(8) },
+                    R { l: area.l + at(ROW_TEXT), t: area.t + at(32), r: area.r, b: area.b - at(8) },
                     fonts.small,
                     MUTED,
                     DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
