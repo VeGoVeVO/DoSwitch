@@ -40,6 +40,9 @@ const ROW_GAP: i32 = 8;
 const PILL_HEIGHT: i32 = 34;
 const KEY_WIDTH: i32 = 160;
 const ORDER_WIDTH: i32 = 90;
+/// The class emblem at the front of a row, in the place the status dot
+/// used to have to itself.
+const EMBLEM: i32 = 24;
 // The list shows at most this many accounts and scrolls the rest, so
 // the window is a fixed, sensible size whether a player runs two
 // clients or twenty. Six is what fits without the panel feeling tall.
@@ -643,20 +646,38 @@ unsafe fn paint(hwnd: HWND) {
             Part::Row { character, breed } => {
                 canvas.outline(area, at(10), at(1), line_live(),
                                if hovered { RAISED } else { SURFACE });
-                canvas.lit_dot(area.l + at(20), area.t + area.height() / 2, at(4), LEAF);
+                // The class emblem where the status dot was, centred on the
+                // same point so the name does not move. A breed the table
+                // does not know gets the dot back rather than a stand-in
+                // emblem: a wrong class beside a name would look like a
+                // reading, and there is nothing about it that looks wrong.
+                let middle = area.t + area.height() / 2;
+                let slot = R::new(
+                    area.l + at(20) - at(EMBLEM) / 2,
+                    middle - at(EMBLEM) / 2,
+                    at(EMBLEM),
+                    at(EMBLEM),
+                );
+                if !crate::emblem::draw(&canvas, slot, breed) {
+                    canvas.lit_dot(area.l + at(20), middle, at(4), LEAF);
+                }
+                // Stopped short of the first pill. The name is the game's
+                // and can be long; running it under the numbers is how a
+                // wide column quietly becomes an unreadable one.
+                let text_right = at(order_x - 12);
                 canvas.text(
                     character,
-                    R { l: area.l + at(36), t: area.t + at(10), r: area.r, b: area.t + at(32) },
+                    R { l: area.l + at(36), t: area.t + at(10), r: text_right, b: area.t + at(32) },
                     fonts.name,
                     CREAM,
-                    DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+                    DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
                 );
                 canvas.text(
                     breed,
-                    R { l: area.l + at(36), t: area.t + at(32), r: area.r, b: area.b - at(8) },
+                    R { l: area.l + at(36), t: area.t + at(32), r: text_right, b: area.b - at(8) },
                     fonts.small,
                     MUTED,
-                    DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+                    DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
                 );
             }
             Part::NextRow => {

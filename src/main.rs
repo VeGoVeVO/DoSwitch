@@ -13,10 +13,12 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod breeds;
 mod clients;
 mod crypto;
 mod http;
 mod draw;
+mod emblem;
 mod hook;
 mod i18n;
 mod keys;

@@ -317,80 +317,90 @@ impl Logo {
     }
 
     /// Drawn into a box, scaled to fit, centred, never cropped.
-    ///
-    /// The scaling is done here, by averaging the source pixels that fall
-    /// under each destination pixel, rather than by handing the job to
-    /// AlphaBlend. AlphaBlend ignores SetStretchBltMode - HALFTONE was
-    /// being set above this call and doing nothing - and point-samples
-    /// instead, so shrinking a 151x140 mark into a thirty pixel box threw
-    /// away nineteen pixels in twenty and kept whichever one it landed on.
-    /// That is what made the logo look chewed at every size in the app.
-    ///
-    /// The source is premultiplied BGRA (build.rs premultiplies it for
-    /// exactly this kind of blending), so a box average of it is valid
-    /// without un-premultiplying first, and compositing is the plain
-    /// `source + destination * (1 - alpha)`.
     pub fn draw(&self, canvas: &Canvas, area: R) {
-        let fit = (area.width() as f32 / self.width as f32)
-            .min(area.height() as f32 / self.height as f32);
-        let width = (self.width as f32 * fit).round() as i32;
-        let height = (self.height as f32 * fit).round() as i32;
-        if width <= 0 || height <= 0 {
-            return;
+        blit(canvas, area, LOGO_BYTES, self.width, self.height);
+    }
+}
+
+/// Premultiplied BGRA drawn into a box, scaled to fit, centred, never
+/// cropped. The logo goes through this, and so does every class emblem.
+///
+/// The scaling is done here, by averaging the source pixels that fall
+/// under each destination pixel, rather than by handing the job to
+/// AlphaBlend. AlphaBlend ignores SetStretchBltMode - HALFTONE was
+/// being set above this call and doing nothing - and point-samples
+/// instead, so shrinking a 151x140 mark into a thirty pixel box threw
+/// away nineteen pixels in twenty and kept whichever one it landed on.
+/// That is what made the logo look chewed at every size in the app, and
+/// it is exactly what a 48px emblem in a 24px slot would do again.
+///
+/// The source is premultiplied BGRA (build.rs premultiplies it for
+/// exactly this kind of blending), so a box average of it is valid
+/// without un-premultiplying first, and compositing is the plain
+/// `source + destination * (1 - alpha)`.
+pub fn blit(canvas: &Canvas, area: R, bytes: &[u8], source_width: i32, source_height: i32) {
+    if source_width <= 0 || source_height <= 0 {
+        return;
+    }
+    let fit = (area.width() as f32 / source_width as f32)
+        .min(area.height() as f32 / source_height as f32);
+    let width = (source_width as f32 * fit).round() as i32;
+    let height = (source_height as f32 * fit).round() as i32;
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    let x0 = area.l + (area.width() - width) / 2;
+    let y0 = area.t + (area.height() - height) / 2;
+    let pixels = canvas.slice();
+    let source = |sx: i32, sy: i32| -> (u32, u32, u32, u32) {
+        let index = ((sy * source_width + sx) * 4) as usize;
+        (
+            bytes[index] as u32,
+            bytes[index + 1] as u32,
+            bytes[index + 2] as u32,
+            bytes[index + 3] as u32,
+        )
+    };
+    for dy in 0..height {
+        let ty = y0 + dy;
+        if ty < 0 || ty >= canvas.height {
+            continue;
         }
-        let x0 = area.l + (area.width() - width) / 2;
-        let y0 = area.t + (area.height() - height) / 2;
-        let pixels = canvas.slice();
-        let source = |sx: i32, sy: i32| -> (u32, u32, u32, u32) {
-            let index = ((sy * self.width + sx) * 4) as usize;
-            (
-                LOGO_BYTES[index] as u32,
-                LOGO_BYTES[index + 1] as u32,
-                LOGO_BYTES[index + 2] as u32,
-                LOGO_BYTES[index + 3] as u32,
-            )
-        };
-        for dy in 0..height {
-            let ty = y0 + dy;
-            if ty < 0 || ty >= canvas.height {
+        // The half-open band of source rows this destination row covers.
+        let sy0 = (dy * source_height / height).clamp(0, source_height - 1);
+        let sy1 = (((dy + 1) * source_height + height - 1) / height).clamp(sy0 + 1, source_height);
+        for dx in 0..width {
+            let tx = x0 + dx;
+            if tx < 0 || tx >= canvas.width {
                 continue;
             }
-            // The half-open band of source rows this destination row covers.
-            let sy0 = (dy * self.height / height).clamp(0, self.height - 1);
-            let sy1 = (((dy + 1) * self.height + height - 1) / height).clamp(sy0 + 1, self.height);
-            for dx in 0..width {
-                let tx = x0 + dx;
-                if tx < 0 || tx >= canvas.width {
-                    continue;
+            let sx0 = (dx * source_width / width).clamp(0, source_width - 1);
+            let sx1 = (((dx + 1) * source_width + width - 1) / width).clamp(sx0 + 1, source_width);
+            let (mut b, mut g, mut r, mut a, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
+            for sy in sy0..sy1 {
+                for sx in sx0..sx1 {
+                    let (sb, sg, sr, sa) = source(sx, sy);
+                    b += sb;
+                    g += sg;
+                    r += sr;
+                    a += sa;
+                    n += 1;
                 }
-                let sx0 = (dx * self.width / width).clamp(0, self.width - 1);
-                let sx1 = (((dx + 1) * self.width + width - 1) / width).clamp(sx0 + 1, self.width);
-                let (mut b, mut g, mut r, mut a, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
-                for sy in sy0..sy1 {
-                    for sx in sx0..sx1 {
-                        let (sb, sg, sr, sa) = source(sx, sy);
-                        b += sb;
-                        g += sg;
-                        r += sr;
-                        a += sa;
-                        n += 1;
-                    }
-                }
-                if n == 0 {
-                    continue;
-                }
-                let (b, g, r, a) = (b / n, g / n, r / n, a / n);
-                if a == 0 {
-                    continue;
-                }
-                let index = (ty * canvas.width + tx) as usize;
-                let under = pixels[index];
-                let keep = 255 - a;
-                let out_r = r + (((under >> 16) & 0xFF) * keep) / 255;
-                let out_g = g + (((under >> 8) & 0xFF) * keep) / 255;
-                let out_b = b + ((under & 0xFF) * keep) / 255;
-                pixels[index] = (out_r.min(255) << 16) | (out_g.min(255) << 8) | out_b.min(255);
             }
+            if n == 0 {
+                continue;
+            }
+            let (b, g, r, a) = (b / n, g / n, r / n, a / n);
+            if a == 0 {
+                continue;
+            }
+            let index = (ty * canvas.width + tx) as usize;
+            let under = pixels[index];
+            let keep = 255 - a;
+            let out_r = r + (((under >> 16) & 0xFF) * keep) / 255;
+            let out_g = g + (((under >> 8) & 0xFF) * keep) / 255;
+            let out_b = b + ((under & 0xFF) * keep) / 255;
+            pixels[index] = (out_r.min(255) << 16) | (out_g.min(255) << 8) | out_b.min(255);
         }
     }
 }
