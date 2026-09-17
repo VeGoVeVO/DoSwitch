@@ -45,6 +45,54 @@ const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "DoSwitch";
 
 fn main() {
+    // The accounts panel's own snapshot, for the README screenshots rather
+    // than a golden check. It renders the panel filled with INVENTED accounts
+    // (DOSWITCH_FAKE) so the pictures the repo ships never carry a real
+    // character's name - the failure this replaces was hand-taken captures of
+    // the author's own team going out on a public page.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(at) = args.iter().position(|a| a == "--panel-snapshot") {
+        let Some(path) = args.get(at + 1) else {
+            std::process::exit(2);
+        };
+        let lang = match args.iter().position(|a| a == "--lang").and_then(|i| args.get(i + 1)) {
+            Some(code) if code == "fr" => i18n::Lang::Fr,
+            Some(code) if code == "es" => i18n::Lang::Es,
+            _ => i18n::Lang::En,
+        };
+        let count = args
+            .iter()
+            .position(|a| a == "--count")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| *n >= 1 && *n <= 11)
+            .unwrap_or(3);
+        // Invented clients, read fresh by clients::list() (see clients.rs).
+        // Set before app::start, which fills the client list from it.
+        std::env::set_var("DOSWITCH_FAKE", count.to_string());
+        unsafe {
+            windows_sys::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+                windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+            );
+        }
+        // A clean settings (never the saved file), with each invented account
+        // given a place in the order and an F-key so the picture shows the
+        // tool in use rather than an empty first run.
+        app::start(store::Settings::empty(lang));
+        let names: Vec<String> =
+            app::with(|state| state.clients.iter().map(|c| c.character.clone()).collect());
+        app::with(|state| {
+            for (index, name) in names.iter().enumerate() {
+                let account = state.settings.account(name);
+                account.order = Some(index as u32 + 1);
+                account.key = keys::Bind::parse(&format!("F{}", index + 1));
+            }
+            state.settings.next = keys::Bind::parse(&format!("F{}", count + 1));
+        });
+        let ok = panel::snapshot(path);
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+
     // Before anything else - before the single-instance mutex, before any
     // window - apply a staged update if one is waiting. Doing it at the start
     // of every launch is what makes the update reliable: it does not depend on

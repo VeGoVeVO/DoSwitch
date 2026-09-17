@@ -228,6 +228,18 @@ fn max_scroll(row_count: usize) -> usize {
 }
 
 fn scale_of(hwnd: HWND) -> f32 {
+    // A forced scale, for the marketing snapshot (--panel-snapshot): the
+    // screenshots the README ships have to be the same picture on a 96-DPI CI
+    // runner as on the author's desk, and DPI is the one input the machine
+    // decides rather than the code. Nothing sets this in a normal run, so a
+    // player's panel is still sized by their own monitor.
+    if let Ok(forced) = std::env::var("DOSWITCH_UI_SCALE") {
+        if let Ok(value) = forced.parse::<f32>() {
+            if value > 0.0 {
+                return value;
+            }
+        }
+    }
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     if dpi == 0 {
         1.0
@@ -370,6 +382,116 @@ pub fn show(hwnd: HWND) {
         ShowWindow(hwnd, SW_SHOW);
         crate::clients::to_foreground(hwnd);
         InvalidateRect(hwnd, std::ptr::null(), 0);
+    }
+}
+
+// windows-sys does not surface PrintWindow in the modules this file already
+// pulls in (it sits under Win32_Storage_Xps), and it is the only way to get a
+// window to draw itself into a DC we own - which is the whole snapshot.
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn PrintWindow(hwnd: HWND, hdc: HDC, flags: u32) -> i32;
+}
+
+/// Photograph the accounts panel into a bottom-up 32bpp BMP, for the README
+/// screenshots. The panel is filled with invented accounts (DOSWITCH_FAKE)
+/// and a seeded order/keys by the caller (main.rs --panel-snapshot), so a
+/// shot taken here never carries a real character's name - which is the
+/// whole reason it exists rather than a capture taken by hand. Same path a
+/// PrintWindow snapshot always uses: create OUR window, pin it to the
+/// top-left ON screen so PrintWindow has something composited to copy (an
+/// off-screen window is not composited and copies out black), pump, then
+/// read the DIB straight out. tools/panel_shots.py turns the BMP into the
+/// PNG the README serves.
+pub fn snapshot(path: &str) -> bool {
+    unsafe {
+        // Never photograph a panel owned by another copy of the app: the
+        // class name is shared, so a running instance would be captured
+        // instead of ours.
+        let existing = FindWindowW(wide(CLASS).as_ptr(), std::ptr::null());
+        if !existing.is_null() {
+            let mut owner = 0u32;
+            GetWindowThreadProcessId(existing, &mut owner);
+            if owner != windows_sys::Win32::System::Threading::GetCurrentProcessId() {
+                std::process::exit(6);
+            }
+        }
+
+        let hwnd = create();
+        if hwnd.is_null() {
+            return false;
+        }
+        app::refresh();
+        app::with(|state| state.scroll = state.scroll.min(max_scroll(state.clients.len())));
+        let (width, height) = window_size(hwnd);
+        SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, width, height, SWP_SHOWWINDOW);
+        ShowWindow(hwnd, SW_SHOW);
+        InvalidateRect(hwnd, std::ptr::null(), 0);
+
+        // Pump so the window actually paints before it is captured.
+        let mut msg: MSG = std::mem::zeroed();
+        for _ in 0..24 {
+            while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+
+        let mut rc: RECT = std::mem::zeroed();
+        GetWindowRect(hwnd, &mut rc);
+        let width = rc.right - rc.left;
+        let height = rc.bottom - rc.top;
+        if width <= 0 || height <= 0 {
+            return false;
+        }
+
+        let screen = GetDC(std::ptr::null_mut());
+        let memory = CreateCompatibleDC(screen);
+        let mut info: BITMAPINFO = std::mem::zeroed();
+        info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = height;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB as u32;
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let bitmap = CreateDIBSection(memory, &info, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
+        if bitmap.is_null() || bits.is_null() {
+            ReleaseDC(std::ptr::null_mut(), screen);
+            DeleteDC(memory);
+            return false;
+        }
+        let old = SelectObject(memory, bitmap as HGDIOBJ);
+        PrintWindow(hwnd, memory, 2);
+
+        let size = (width * height * 4) as usize;
+        let pixels = std::slice::from_raw_parts(bits as *const u8, size);
+        let stride = (width * 4) as u32;
+        let mut file: Vec<u8> = Vec::with_capacity(size + 54);
+        file.extend_from_slice(b"BM");
+        file.extend_from_slice(&((54 + size) as u32).to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        file.extend_from_slice(&54u32.to_le_bytes());
+        file.extend_from_slice(&40u32.to_le_bytes());
+        file.extend_from_slice(&width.to_le_bytes());
+        file.extend_from_slice(&height.to_le_bytes());
+        file.extend_from_slice(&1u16.to_le_bytes());
+        file.extend_from_slice(&32u16.to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        file.extend_from_slice(&(size as u32).to_le_bytes());
+        file.extend_from_slice(&stride.to_le_bytes());
+        file.extend_from_slice(&stride.to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        file.extend_from_slice(&0u32.to_le_bytes());
+        file.extend_from_slice(pixels);
+
+        SelectObject(memory, old);
+        DeleteObject(bitmap as HGDIOBJ);
+        DeleteDC(memory);
+        ReleaseDC(std::ptr::null_mut(), screen);
+
+        std::fs::write(path, &file).is_ok()
     }
 }
 

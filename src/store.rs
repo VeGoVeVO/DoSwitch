@@ -34,7 +34,10 @@ pub struct Settings {
 }
 
 impl Settings {
-    fn empty(lang: Lang) -> Settings {
+    // Clean settings for a language, never touching the saved file - used by
+    // the marketing snapshot (main.rs --panel-snapshot) so its picture is the
+    // same on a machine that has used the app and one that never has.
+    pub(crate) fn empty(lang: Lang) -> Settings {
         Settings {
             lang,
             next: None,
