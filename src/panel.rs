@@ -314,6 +314,18 @@ fn scaled(area: R, scale: f32) -> R {
     R { l: at(area.l), t: at(area.t), r: at(area.r), b: at(area.b) }
 }
 
+/// The note's box width in device pixels - the ONE place this is computed,
+/// so measuring how many lines it wraps to and drawing it can never round
+/// to two different widths again. It used to be computed twice: once here
+/// (as a single rounded span) and once in paint(), where building the
+/// device rect from a logical `R` and rounding its `l` and `r` corners
+/// independently (via `scaled`) could come out a device pixel or two
+/// narrower than this - narrow enough, at some scales, to wrap one extra
+/// word onto a line the window was already sized without.
+fn note_width(scale: f32) -> i32 {
+    ((WIDTH - PAD * 2 - 8) as f32 * scale).round() as i32
+}
+
 /// Both wrapped blocks measured, in logical pixels. Measuring needs a
 /// device context, so it happens against a throwaway one.
 fn measure_text(scale: f32, lang: Lang) -> Text {
@@ -326,7 +338,7 @@ fn measure_text(scale: f32, lang: Lang) -> Text {
             let forward = |value: i32| (value as f32 * scale).round() as i32;
             let note = back(canvas.wrapped_height(
                 lang.note(),
-                forward(WIDTH - PAD * 2 - 8),
+                note_width(scale),
                 fonts.note,
             ));
             let subtitle = back(canvas.wrapped_height(
@@ -408,9 +420,13 @@ unsafe fn window_size(hwnd: HWND) -> (i32, i32) {
 }
 
 /// Resize the window to fit its current contents WITHOUT moving it, then
-/// repaint. Called whenever the contents change height under the panel -
-/// a language toggle, a refresh - so the footer can never be pushed off
-/// the bottom the way a wordier language once did.
+/// repaint. `repaint()` below calls this before every single repaint, not
+/// just a language toggle or the Refresh button, so the footer can never
+/// be pushed off the bottom the way a wordier language once did - or the
+/// way an account count that changed while the panel stayed open (a client
+/// opening or closing, a stale-handle refresh from switch_to/switch_next)
+/// once did, because the very next repaint redrew the new row count into
+/// the window's old, frozen size.
 pub fn resize(hwnd: HWND) {
     unsafe {
         let (width, height) = window_size(hwnd);
@@ -594,8 +610,16 @@ pub fn hide(hwnd: HWND) {
     unsafe { ShowWindow(hwnd, SW_HIDE) };
 }
 
+/// The single choke point every repaint goes through - not a bare
+/// InvalidateRect, because content that can change the window's required
+/// height (the account count, the language, a note that grew a line) can
+/// change under the panel from almost anywhere while it stays open: a
+/// click on a row can refresh the account list right before this runs.
+/// Resizing first, every time, means no call site can forget to and leave
+/// the footer stranded below the bottom of a window sized for a different
+/// row count.
 fn repaint(hwnd: HWND) {
-    unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
+    resize(hwnd);
 }
 
 fn pill_label(owner: &str, lang: Lang, capturing: bool) -> (String, u32) {
@@ -955,12 +979,19 @@ unsafe fn paint_to(hwnd: HWND, dc: HDC) {
         .find(|item| item.part == Part::Done)
         .map(|item| item.area.t)
         .unwrap_or(logical_height);
+    // Built directly in device pixels - l and the width from note_width(),
+    // not a logical rect run through scaled(), which rounds l and r
+    // independently and can land r a device pixel short of where l + the
+    // width measure_text() wrapped against actually falls.
+    let note_l = at(PAD + 4);
     canvas.text(
         lang.note(),
-        scaled(
-            R::new(PAD + 4, note_top - 16 - text.note, WIDTH - PAD * 2 - 8, text.note + 4),
-            scale,
-        ),
+        R {
+            l: note_l,
+            t: at(note_top - 16 - text.note),
+            r: note_l + note_width(scale),
+            b: at(note_top - 12),
+        },
         fonts.note,
         DIM,
         DT_WORDBREAK | DT_NOPREFIX,
@@ -1118,8 +1149,8 @@ fn clicked(hwnd: HWND, part: Part) {
         Part::Refresh => {
             app::refresh();
             app::with(|state| state.scroll = state.scroll.min(max_scroll(state.clients.len())));
-            resize(hwnd);
-            return;
+            // No explicit resize() here: the trailing repaint(hwnd) below
+            // now does it for every part, this one included.
         }
         Part::Done => hide(hwnd),
         Part::AutoUpdate => {
@@ -1412,4 +1443,64 @@ unsafe extern "system" fn wndproc(
 /// click should open or close it.
 pub fn is_open(hwnd: HWND) -> bool {
     !hwnd.is_null() && unsafe { IsWindowVisible(hwnd) != 0 }
+}
+
+/// Reproduces the regression this file's `repaint()` exists to close: the
+/// account count changing (`app::refresh()`, the same call `switch_next()`
+/// makes unconditionally and `switch_to()` makes on a stale-handle retry)
+/// while the panel stays open, then a plain repaint with no resize - which
+/// is what every non-Refresh repaint path used to do. Before the fix this
+/// left the window sized for the OLD row count, clipping whatever the new,
+/// taller content laid out below it - the footer included.
+#[cfg(test)]
+mod drift_regression_check {
+    use super::*;
+
+    unsafe fn client_height(hwnd: HWND) -> i32 {
+        let mut rc: RECT = std::mem::zeroed();
+        GetClientRect(hwnd, &mut rc);
+        rc.bottom - rc.top
+    }
+
+    #[test]
+    fn drifting_account_count_needs_a_resize_and_repaint_now_gives_it_one() {
+        unsafe {
+            std::env::set_var("DOSWITCH_UI_SCALE", "1.0");
+            std::env::set_var("DOSWITCH_FAKE", "3");
+            app::start(crate::store::Settings::empty(crate::i18n::Lang::En));
+            let hwnd = create();
+            // The "panel just opened" sizing - what show() does.
+            resize(hwnd);
+            let (_, opened_h) = window_size(hwnd);
+            assert_eq!(
+                client_height(hwnd), opened_h,
+                "window was not sized for 3 rows right after opening"
+            );
+
+            // The account count grows while the panel stays open, and the
+            // OLD code repainted with a bare InvalidateRect - no resize.
+            std::env::set_var("DOSWITCH_FAKE", "6");
+            app::refresh();
+            InvalidateRect(hwnd, std::ptr::null(), 0);
+            let h_bug = client_height(hwnd);
+            assert_eq!(
+                h_bug, opened_h,
+                "a bare InvalidateRect resized the window on its own - the repro no longer matches the bug"
+            );
+            let (_, wanted_h) = window_size(hwnd);
+            assert!(
+                wanted_h > h_bug,
+                "6 rows should need a taller window than 3 rows did (wanted {wanted_h}, still {h_bug})"
+            );
+
+            // repaint() is the fix: every repaint goes through resize() now.
+            repaint(hwnd);
+            assert_eq!(
+                client_height(hwnd), wanted_h,
+                "repaint() did not resize the window to fit the new row count"
+            );
+
+            DestroyWindow(hwnd);
+        }
+    }
 }
