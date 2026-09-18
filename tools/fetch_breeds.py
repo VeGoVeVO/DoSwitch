@@ -2,7 +2,7 @@
 
 Two things come out of one source so they cannot drift apart:
 
-    assets/breeds/<id>.png   the class symbol, 48x48 RGBA
+    assets/breeds/<id>.png   the class symbol, 96x96 RGBA
     src/breeds.rs            every language's spelling of every class
 
 The name table is the part that matters. The window title gives the class
@@ -13,9 +13,10 @@ silently: the row simply keeps the plain dot it always had. Five languages
 are published, so all five go in the table whether or not the app's own
 interface speaks them.
 
-48px because the panel's slot is 24 logical pixels and a 200% display
-doubles it; anything above that is weight in the executable for pixels no
-monitor asks for.
+96px because the badge the panel draws these in is 26 logical pixels wide
+and a 200% display doubles that: a 48px tile left barely any headroom to
+average from and the marks came out grainy. It costs about 140KB in the
+installer once compressed, which is the right side of that trade.
 
     python tools/fetch_breeds.py
 
@@ -32,10 +33,19 @@ import urllib.request
 from PIL import Image
 
 API = "https://api.dofusdb.fr/breeds?$limit=50"
-TILE = 48
-# Empty tile left around the trimmed mark, so the panel's edge glow has
-# room to spread instead of being clipped flat against the tile's border.
-MARGIN = 4
+
+# The class PORTRAIT, from Ankama's own encyclopedia - 468x417 of the
+# character's face, keyed on the same breed id the API above uses.
+#
+# Found by reading what www.dofus.com/en/mmorpg/encyclopedia/classes loads,
+# not by guessing: static.ankama.com refuses a path it does not serve, so
+# every invented prefix 403s and the real one is only discoverable from a
+# page that references it. Worth writing down, because nothing else public
+# has these - the class symbols are easy to find and the only head assets
+# anywhere else are 30x30, which is mush at the size a row draws.
+FACE = "https://static.ankama.com/dofus/ng/modules/mmorpg/encyclopedia/unity/breeds/assets/avatar/{}.jpg"
+
+TILE = 96
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 ART = os.path.join(ROOT, "assets", "breeds")
@@ -82,39 +92,30 @@ def names_of(breed):
 
 
 def save_art(breed):
-    """Trim the transparent margin, then centre what is left in the tile.
+    """The class portrait, square-cropped to the tile the panel fills.
 
-    The source art is not consistently framed: some symbols sit dead centre
-    in their square, others are pushed to a corner with a wide empty band
-    down one side. Resizing the raw square meant the panel centred the
-    TILE rather than the MARK, so a row's emblem sat visibly off to one
-    side, and a symbol with a lot of padding drew smaller than its
-    neighbours for no reason a reader could see - the two complaints are
-    one bug.
+    Square because the panel draws these into a rounded square badge and
+    fills it edge to edge, the way any avatar is drawn; a letterboxed
+    portrait in a square tile would show the row's background down two
+    sides and look like a mistake. The crop is centred, which is where
+    these portraits put the face.
 
-    Trimming to the alpha bounding box and fitting THAT to the tile fixes
-    both at once, and doing it on the full-size source rather than on the
-    downscaled copy means nothing is enlarged from pixels already thrown
-    away. MARGIN keeps a ring of empty tile around the mark so the glow
-    the panel draws round its edge has somewhere to go.
+    Opaque on purpose - the portrait carries its own coloured background,
+    and that background is most of what makes one class distinguishable
+    from another at the size a row has.
     """
-    url = breed["img"]
     raw = os.path.join(ART, f"_{breed['id']}.src")
-    urllib.request.urlretrieve(url, raw)
-    source = Image.open(raw).convert("RGBA")
+    urllib.request.urlretrieve(FACE.format(breed["id"]), raw)
+    source = Image.open(raw).convert("RGB")
 
-    box = source.split()[3].getbbox()
-    if box:
-        source = source.crop(box)
+    side = min(source.width, source.height)
+    left = (source.width - side) // 2
+    top = (source.height - side) // 2
+    face = source.crop((left, top, left + side, top + side))
 
-    inner = TILE - MARGIN * 2
-    fit = min(inner / source.width, inner / source.height)
-    size = (max(1, round(source.width * fit)), max(1, round(source.height * fit)))
-    mark = source.resize(size, Image.LANCZOS)
-
-    tile = Image.new("RGBA", (TILE, TILE), (0, 0, 0, 0))
-    tile.paste(mark, ((TILE - size[0]) // 2, (TILE - size[1]) // 2), mark)
-    tile.save(os.path.join(ART, f"{breed['id']}.png"))
+    face.resize((TILE, TILE), Image.LANCZOS).convert("RGBA").save(
+        os.path.join(ART, f"{breed['id']}.png")
+    )
     os.remove(raw)
 
 

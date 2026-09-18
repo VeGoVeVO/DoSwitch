@@ -52,8 +52,6 @@ const INIT_WIDTH: i32 = 92;
 /// auto-switch rows get the same badge with their status dot inside it -
 /// puts every row's text on one left rail instead of two.
 const BADGE: i32 = 40;
-/// The emblem's inset inside that badge.
-const BADGE_PAD: i32 = 7;
 /// Where a row's text starts: past the badge, plus a gap.
 const ROW_TEXT: i32 = 11 + BADGE + 12;
 // The list shows at most this many accounts and scrolls the rest, so
@@ -448,14 +446,6 @@ pub fn show(hwnd: HWND) {
     }
 }
 
-// windows-sys does not surface PrintWindow in the modules this file already
-// pulls in (it sits under Win32_Storage_Xps), and it is the only way to get a
-// window to draw itself into a DC we own - which is the whole snapshot.
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn PrintWindow(hwnd: HWND, hdc: HDC, flags: u32) -> i32;
-}
-
 /// Photograph the accounts panel into a bottom-up 32bpp BMP, for the README
 /// screenshots. The panel is filled with invented accounts (DOSWITCH_FAKE)
 /// and a seeded order/keys by the caller (main.rs --panel-snapshot), so a
@@ -764,13 +754,17 @@ unsafe fn paint_to(hwnd: HWND, dc: HDC) {
             Part::Row { character, breed } => {
                 canvas.outline(area, at(10), at(1), line_live(),
                                if hovered { RAISED } else { SURFACE });
-                // The badge, then the class emblem sitting in it. A breed
-                // the table does not know gets the plain dot back, in the
-                // same badge: a wrong emblem beside a name would look like
-                // a reading, and there is nothing about it that looks wrong.
+                // The class portrait, filling the badge, with a hairline
+                // over it so it reads as a tile rather than as a picture
+                // floating on the row. A breed the table does not know
+                // gets the plain dot back in an empty badge: a wrong face
+                // beside a name would look like a reading, and there is
+                // nothing about it that looks wrong.
                 let badge = badge_of(area, scale);
-                canvas.outline(badge, at(12), at(1), line_soft(), PILL);
-                if !crate::emblem::draw(&canvas, badge.inset(at(BADGE_PAD)), breed) {
+                if crate::emblem::draw(&canvas, badge, at(12), breed) {
+                    canvas.ring(badge, at(12), at(1), line_soft());
+                } else {
+                    canvas.outline(badge, at(12), at(1), line_soft(), PILL);
                     canvas.lit_dot(
                         badge.l + badge.width() / 2,
                         badge.t + badge.height() / 2,

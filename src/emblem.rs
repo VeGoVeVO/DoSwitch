@@ -1,4 +1,10 @@
-//! The class emblem that sits at the front of an account's row.
+//! The class portrait that sits at the front of an account's row.
+//!
+//! Ankama's own encyclopedia artwork, square-cropped by
+//! tools/fetch_breeds.py and drawn to fill the row's badge. It replaced a
+//! class SYMBOL - a sword, a bow, an hourglass - which was recognisable
+//! but read as clip-art at 33 pixels; a face carries its own colour and
+//! is told apart at a glance, which is the entire job of the thing.
 //!
 //! The artwork is decoded at build time into one buffer of equal tiles
 //! (see build.rs), so the executable carries pixels and the panel carries
@@ -13,15 +19,7 @@
 //! beside a name is worse than no emblem, because nothing about it looks
 //! wrong.
 
-use crate::draw::{blit_lit, Canvas, R};
-
-/// The halo behind an emblem: white, and soft enough that it reads as the
-/// mark being lit rather than as an outline drawn round it. The panel is
-/// nearly black and the artwork is saturated, so a white fringe is what
-/// separates the two - a leaf-coloured one disappeared into the row's own
-/// border and a black one just muddied the edge.
-const HALO: u32 = 0x00FF_FFFF;
-const HALO_STRENGTH: f32 = 0.55;
+use crate::draw::{blit_rounded, Canvas, R};
 
 include!(concat!(env!("OUT_DIR"), "/breeds_atlas.rs"));
 const EMBLEM_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/breeds.bgra"));
@@ -33,13 +31,14 @@ fn tile(id: u32) -> Option<&'static [u8]> {
     EMBLEM_BYTES.get(slot * size..(slot + 1) * size)
 }
 
-/// Draw the emblem for this breed name into `area`. True when there was
-/// one; false leaves the area untouched for the caller to fall back on.
-pub fn draw(canvas: &Canvas, area: R, breed: &str) -> bool {
+/// Fill `area` with this breed's portrait, clipped to `radius`. True when
+/// there was one; false leaves the area untouched for the caller to fall
+/// back on.
+pub fn draw(canvas: &Canvas, area: R, radius: i32, breed: &str) -> bool {
     let Some(bytes) = crate::breeds::id_for(breed).and_then(tile) else {
         return false;
     };
-    blit_lit(canvas, area, bytes, EMBLEM_TILE, EMBLEM_TILE, HALO, HALO_STRENGTH);
+    blit_rounded(canvas, area, bytes, EMBLEM_TILE, EMBLEM_TILE, radius);
     true
 }
 

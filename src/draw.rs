@@ -156,6 +156,47 @@ impl Canvas {
         self.round(area.inset(thickness), (radius - thickness).max(0), inside);
     }
 
+    /// A rounded border drawn as a ring, leaving the inside untouched.
+    ///
+    /// `outline` cannot do this: it paints the shape and then paints the
+    /// interior back over it, so it needs a single flat colour to paint
+    /// back - which silently flattens whatever gradient or glow is already
+    /// underneath. Where the card is lit, the border has to be a stroke.
+    pub fn ring(&self, area: R, radius: i32, thickness: i32, color: u32) {
+        self.ring_alpha(area, radius, thickness, color, 1.0);
+    }
+
+    /// A ring at a fraction of its strength, for one that is fading.
+    pub fn ring_alpha(&self, area: R, radius: i32, thickness: i32, color: u32, alpha: f32) {
+        let alpha = alpha.clamp(0.0, 1.0);
+        if alpha <= 0.0 {
+            return;
+        }
+        let pixels = self.slice();
+        let thickness = thickness.max(1) as f32;
+        let radius = radius.min(area.width() / 2).min(area.height() / 2).max(0) as f32;
+        let inner = area.inset(thickness as i32);
+        let inner_radius = (radius - thickness).max(0.0);
+        let coverage = |area: &R, radius: f32, px: f32, py: f32| {
+            let cx = px.clamp(area.l as f32 + radius, area.r as f32 - radius);
+            let cy = py.clamp(area.t as f32 + radius, area.b as f32 - radius);
+            let distance = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+            (radius - distance + 0.5).clamp(0.0, 1.0)
+        };
+        for y in area.t.max(0)..area.b.min(self.height) {
+            let py = y as f32 + 0.5;
+            for x in area.l.max(0)..area.r.min(self.width) {
+                let px = x as f32 + 0.5;
+                let on = (coverage(&area, radius, px, py) - coverage(&inner, inner_radius, px, py)) * alpha;
+                if on <= 0.0 {
+                    continue;
+                }
+                let index = (y * self.width + x) as usize;
+                pixels[index] = mix(pixels[index], color, on);
+            }
+        }
+    }
+
     pub fn dot(&self, cx: i32, cy: i32, radius: i32, color: u32) {
         self.round(
             R::new(cx - radius, cy - radius, radius * 2, radius * 2),
@@ -351,36 +392,129 @@ type Cell = [u8; 4];
 /// canvas, is what lets the halo be drawn from the SAME pixels the mark is
 /// drawn from: the glow traces the shape that actually lands on screen, not
 /// the full-size one it was scaled from.
+/// The overlap of destination cell `d` with each source pixel it touches:
+/// the first source index, and the weight of each one from there on.
+///
+/// This is the whole difference between a clean shrink and a blocky one.
+/// Taking whole source pixels - the band from `d * src / dst` to the next
+/// one - gives each destination pixel either N or N+1 of them depending on
+/// where the boundaries happen to land, so neighbouring pixels are averaged
+/// from different numbers of samples and the result grains up. At 48 into
+/// 33 that is one sample or two, a 2:1 swing, and it reads as exactly the
+/// pixellation it is. Weighting the partial pixels at each end makes every
+/// destination pixel cover the same source AREA, whatever the ratio.
+fn overlap(d: i32, source: i32, dest: i32, weights: &mut Vec<f32>) -> i32 {
+    let from = d as f32 * source as f32 / dest as f32;
+    let to = (d + 1) as f32 * source as f32 / dest as f32;
+    let first = from.floor() as i32;
+    let last = ((to.ceil() as i32) - 1).max(first);
+    weights.clear();
+    for index in first..=last {
+        let lo = (index as f32).max(from);
+        let hi = ((index + 1) as f32).min(to);
+        weights.push((hi - lo).max(0.0));
+    }
+    first
+}
+
 fn sample(bytes: &[u8], source_width: i32, source_height: i32, width: i32, height: i32) -> Vec<Cell> {
     let mut cells = vec![[0u8; 4]; (width * height) as usize];
+    let (mut rows, mut columns) = (Vec::new(), Vec::new());
     for dy in 0..height {
-        // The half-open band of source rows this destination row covers.
-        let sy0 = (dy * source_height / height).clamp(0, source_height - 1);
-        let sy1 = (((dy + 1) * source_height + height - 1) / height).clamp(sy0 + 1, source_height);
+        let first_row = overlap(dy, source_height, height, &mut rows);
         for dx in 0..width {
-            let sx0 = (dx * source_width / width).clamp(0, source_width - 1);
-            let sx1 = (((dx + 1) * source_width + width - 1) / width).clamp(sx0 + 1, source_width);
-            let (mut b, mut g, mut r, mut a, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
-            for sy in sy0..sy1 {
-                for sx in sx0..sx1 {
+            let first_column = overlap(dx, source_width, width, &mut columns);
+            let (mut b, mut g, mut r, mut a, mut total) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+            for (row, weight_y) in rows.iter().enumerate() {
+                let sy = (first_row + row as i32).clamp(0, source_height - 1);
+                for (column, weight_x) in columns.iter().enumerate() {
+                    let sx = (first_column + column as i32).clamp(0, source_width - 1);
+                    let weight = weight_y * weight_x;
+                    if weight <= 0.0 {
+                        continue;
+                    }
                     let index = ((sy * source_width + sx) * 4) as usize;
-                    b += bytes[index] as u32;
-                    g += bytes[index + 1] as u32;
-                    r += bytes[index + 2] as u32;
-                    a += bytes[index + 3] as u32;
-                    n += 1;
+                    b += bytes[index] as f32 * weight;
+                    g += bytes[index + 1] as f32 * weight;
+                    r += bytes[index + 2] as f32 * weight;
+                    a += bytes[index + 3] as f32 * weight;
+                    total += weight;
                 }
             }
-            if n == 0 {
+            if total <= 0.0 {
                 continue;
             }
-            cells[(dy * width + dx) as usize] =
-                [(b / n) as u8, (g / n) as u8, (r / n) as u8, (a / n) as u8];
+            let pick = |sum: f32| (sum / total).round().clamp(0.0, 255.0) as u8;
+            cells[(dy * width + dx) as usize] = [pick(b), pick(g), pick(r), pick(a)];
         }
     }
     cells
 }
 
+/// Premultiplied BGRA drawn to FILL a rectangle, clipped to a rounded
+/// corner radius - the way an avatar is drawn.
+///
+/// `blit_lit` centres a transparent MARK in its box and lights the edges
+/// it finds; this fills the box with an OPAQUE picture instead, so there
+/// are no edges to find and the shape has to come from the clip. The
+/// coverage is the same distance-to-a-rounded-rectangle `round` uses, so
+/// a portrait's corners are antialiased to exactly the curve the badge
+/// under it is drawn with rather than to a staircase a pixel off it.
+pub fn blit_rounded(
+    canvas: &Canvas,
+    area: R,
+    bytes: &[u8],
+    source_width: i32,
+    source_height: i32,
+    radius: i32,
+) {
+    let (width, height) = (area.width(), area.height());
+    if source_width <= 0 || source_height <= 0 || width <= 0 || height <= 0 {
+        return;
+    }
+    let cells = sample(bytes, source_width, source_height, width, height);
+    let pixels = canvas.slice();
+    let radius = radius.min(width / 2).min(height / 2).max(0) as f32;
+    let (left, top) = (area.l as f32, area.t as f32);
+    let (right, bottom) = (area.r as f32, area.b as f32);
+    for dy in 0..height {
+        let ty = area.t + dy;
+        if ty < 0 || ty >= canvas.height {
+            continue;
+        }
+        let py = ty as f32 + 0.5;
+        let cy = py.clamp(top + radius, bottom - radius);
+        for dx in 0..width {
+            let tx = area.l + dx;
+            if tx < 0 || tx >= canvas.width {
+                continue;
+            }
+            let px = tx as f32 + 0.5;
+            let cx = px.clamp(left + radius, right - radius);
+            let distance = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+            let inside = (radius - distance + 0.5).clamp(0.0, 1.0);
+            if inside <= 0.0 {
+                continue;
+            }
+            let [b, g, r, a] = cells[(dy * width + dx) as usize];
+            let alpha = (a as f32 * inside) as u32;
+            if alpha == 0 {
+                continue;
+            }
+            // The cell is premultiplied, so scaling it by the clip's
+            // coverage keeps it premultiplied and the composite stays the
+            // plain `source + destination * (1 - alpha)`.
+            let scale = |value: u8| (value as f32 * inside) as u32;
+            let index = (ty * canvas.width + tx) as usize;
+            let under = pixels[index];
+            let keep = 255 - alpha.min(255);
+            let out_r = scale(r) + (((under >> 16) & 0xFF) * keep) / 255;
+            let out_g = scale(g) + (((under >> 8) & 0xFF) * keep) / 255;
+            let out_b = scale(b) + ((under & 0xFF) * keep) / 255;
+            pixels[index] = (out_r.min(255) << 16) | (out_g.min(255) << 8) | out_b.min(255);
+        }
+    }
+}
 /// A separable moving-average pass over one channel. Run twice it is close
 /// enough to a gaussian for a halo, and it costs a few thousand adds on a
 /// field this small rather than a kernel multiply per pixel.
