@@ -93,6 +93,27 @@ pub fn refresh() {
     clients::forget_dead_windows();
     let fresh = clients::list();
     with(|app| app.clients = fresh);
+
+    // The account list has just changed, and the panel's height is a
+    // function of how many accounts are in it - so re-fit the window HERE,
+    // at the one place the list can change, instead of trusting every
+    // caller to remember afterwards.
+    //
+    // hook::act() is the caller that proves the point. When a bind misses
+    // because the window handle went stale, it refreshes and switches
+    // again - and it never touches the panel at all, because switching is
+    // all it is there to do. A client opened since the panel was last
+    // sized therefore landed in the list with nothing asking the window to
+    // grow for it, and the next repaint drew the new row into a window
+    // still sized for the old count, with the footer past the bottom edge.
+    //
+    // Both `with` blocks above are closed before this runs: resize() reads
+    // the same state through window_size(), and borrowing it twice at once
+    // would panic rather than merely look wrong.
+    let panel = with(|app| app.panel);
+    if crate::panel::is_open(panel) {
+        crate::panel::resize(panel);
+    }
 }
 
 pub fn save() {

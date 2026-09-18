@@ -102,7 +102,25 @@ fn main() {
             }
             state.settings.next = keys::Bind::parse(&format!("F{}", count + 1));
         });
-        let ok = panel::snapshot(path);
+        // --grow N: show the panel sized for `count`, then let N accounts
+        // appear underneath it, the way opening another client does. This is
+        // the regression check for the footer going missing when the list
+        // grows after the window was sized.
+        let grow = args
+            .iter()
+            .position(|a| a == "--grow")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| *n >= 1 && *n <= 11);
+        let ok = panel::snapshot_with(path, grow.map(|to| {
+            move || {
+                // clients::list() re-reads DOSWITCH_FAKE on every call, so
+                // raising it and refreshing is the same path a newly
+                // detected client takes.
+                std::env::set_var("DOSWITCH_FAKE", to.to_string());
+                app::refresh();
+            }
+        }));
         std::process::exit(if ok { 0 } else { 1 });
     }
 

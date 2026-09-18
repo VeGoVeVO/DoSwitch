@@ -472,7 +472,15 @@ pub fn show(hwnd: HWND) {
 /// off-screen window is not composited and copies out black), pump, then
 /// read the DIB straight out. tools/panel_shots.py turns the BMP into the
 /// PNG the README serves.
+pub fn snapshot_with(path: &str, after_show: Option<impl FnOnce()>) -> bool {
+    snapshot_inner(path, after_show)
+}
+
 pub fn snapshot(path: &str) -> bool {
+    snapshot_inner(path, None::<fn()>)
+}
+
+fn snapshot_inner(path: &str, after_show: Option<impl FnOnce()>) -> bool {
     unsafe {
         // Never photograph a panel owned by another copy of the app: the
         // class name is shared, so a running instance would be captured
@@ -490,6 +498,12 @@ pub fn snapshot(path: &str) -> bool {
         if hwnd.is_null() {
             return false;
         }
+        // Record it the way main.rs does for the real panel. Without this
+        // anything that reaches the panel through app state - app::refresh()
+        // asking the open window to re-fit, for one - finds a null handle
+        // here and quietly does nothing, and a regression test built on that
+        // would pass by never exercising what it tests.
+        app::with(|state| state.panel = hwnd);
         app::refresh();
         app::with(|state| state.scroll = state.scroll.min(max_scroll(state.clients.len())));
         let (width, height) = window_size(hwnd);
@@ -505,6 +519,21 @@ pub fn snapshot(path: &str) -> bool {
                 DispatchMessageW(&msg);
             }
             std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+
+        // The window is up and sized for what it had. Let the caller change
+        // the account list underneath it - that gap is where a newly
+        // detected client lands in real use - then pump again so whatever
+        // the app does about it has happened before the shutter.
+        if let Some(change) = after_show {
+            change();
+            for _ in 0..12 {
+                while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(8));
+            }
         }
 
         // The CLIENT rect, not the window rect: the painter fills the client
